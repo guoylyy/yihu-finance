@@ -1,0 +1,23 @@
+{
+  "code": "finance",
+  "name": "集团财务",
+  "icon": "💰",
+  "category": "财务",
+  "description": "多公司账户与流水、收付款、工资报销、发票借贷、月结、资金预测",
+  "port": 3010,
+  "health": "/api/health",
+  "callback": "/sso/callback",
+  "entry": "/",
+  "mcp": "/mcp",
+  "database": true,
+  "memory": "512m",
+  "visibility": null,
+  "isDefault": false,
+  "env": {
+    "UPLOAD_DIR": "/data/uploads"
+  },
+  "deploy": {
+    "branch": "release",
+    "mode": "auto"
+  }
+}

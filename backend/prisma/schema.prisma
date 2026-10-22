@@ -1,0 +1,666 @@
+// 以虎集团财务系统 - Prisma Schema
+// 数据库：MySQL @ localhost:3306/yihu_finance
+// 约定：
+//   1. 金额一律 Decimal(18,2)，精确到分，禁止用 Float
+//   2. 所有核心业务表带 companyId / status / remark / createdAt / updatedAt / deletedAt
+//   3. 删除一律软删（deletedAt），不做物理删除
+//   4. 状态、类型用英文常量入库，中文标签在前端 constants 里映射
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+// =====================================================
+// 0. 用户与审计
+// =====================================================
+
+model User {
+  id           BigInt    @id @default(autoincrement())
+  username     String    @unique @db.VarChar(50)
+  passwordHash String    @map("password_hash") @db.VarChar(255)
+  name         String    @db.VarChar(50)
+  phone        String?   @db.VarChar(20)
+  // ADMIN 管理者 / FINANCE 财务 / STAFF 业务 / VIEWER 只读
+  role         String    @db.VarChar(32)
+  // 以虎 One 平台用户 id：从平台统一登录进来时按它对人（首次登录时按用户名对上或新建）
+  platformUserId Int?    @map("platform_user_id")
+  // 数据范围：null = 全部公司；否则为公司 id 数组
+  companyScope Json?     @map("company_scope")
+  status       String    @default("ACTIVE") @db.VarChar(20)
+  remark       String?   @db.VarChar(500)
+  lastLoginAt  DateTime? @map("last_login_at")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+  deletedAt    DateTime? @map("deleted_at")
+
+  @@index([role])
+  @@map("users")
+}
+
+model AuditLog {
+  id        BigInt   @id @default(autoincrement())
+  userId    BigInt?  @map("user_id")
+  userName  String?  @map("user_name") @db.VarChar(50)
+  action    String   @db.VarChar(32) // CREATE / UPDATE / DELETE / APPROVE / PAY / CLOSE / IMPORT
+  entity    String   @db.VarChar(50)
+  entityId  String?  @map("entity_id") @db.VarChar(50)
+  summary   String?  @db.VarChar(500)
+  before    Json?
+  after     Json?
+  ip        String?  @db.VarChar(64)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([entity, entityId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+// =====================================================
+// 1. 主数据：公司 / 账户 / 往来单位 / 项目 / 分类
+// =====================================================
+
+model Company {
+  id           BigInt    @id @default(autoincrement())
+  code         String    @unique @db.VarChar(32) // 简称，如「云帆科技」
+  name         String    @db.VarChar(120)        // 全称
+  taxNo        String?   @map("tax_no") @db.VarChar(50)
+  legalPerson  String?   @map("legal_person") @db.VarChar(50)
+  mainBusiness String?   @map("main_business") @db.VarChar(200)
+  sharePercent Decimal?  @map("share_percent") @db.Decimal(5, 2) // 我方持股比例
+  capital      Decimal?  @db.Decimal(18, 2)                      // 注册资本
+  sortOrder    Int       @default(0) @map("sort_order")
+  status       String    @default("ACTIVE") @db.VarChar(20)
+  remark       String?   @db.VarChar(500)
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+  deletedAt    DateTime? @map("deleted_at")
+
+  accounts       Account[]
+  transactions   Transaction[]
+  receivables    Receivable[]
+  payables       Payable[]
+  payments       Payment[]
+  payrolls       Payroll[]
+  reimbursements Reimbursement[]
+  invoices       Invoice[]
+  loans          Loan[]
+  projects       Project[]
+  persons        Person[]
+  customers      Customer[]
+  suppliers      Supplier[]
+  closePeriods   ClosePeriod[]
+  forecastItems  ForecastItem[]
+
+  @@map("companies")
+}
+
+model Account {
+  id             BigInt    @id @default(autoincrement())
+  companyId      BigInt    @map("company_id")
+  name           String    @db.VarChar(100)
+  // BANK 银行 / ALIPAY / WECHAT / CASH 现金 / PETTY 备用金 / INTERCOMPANY 公司间往来
+  type           String    @default("BANK") @db.VarChar(20)
+  bankName       String?   @map("bank_name") @db.VarChar(100)
+  accountNo      String?   @map("account_no") @db.VarChar(64) // 完整账号，列表默认脱敏
+  currency       String    @default("CNY") @db.VarChar(8)
+  initialBalance Decimal   @default(0) @map("initial_balance") @db.Decimal(18, 2)
+  // 期初余额对应的日期：这一天（含）之前的收支都已包含在期初里，
+  // 导入早于这一天的流水会重复计算，导入向导据此给出提醒
+  initialDate    DateTime? @map("initial_date") @db.Date
+  balance        Decimal   @default(0) @db.Decimal(18, 2)
+  balanceAt      DateTime? @map("balance_at")
+  isPrimary      Boolean   @default(false) @map("is_primary")
+  status         String    @default("ACTIVE") @db.VarChar(20)
+  remark         String?   @db.VarChar(500)
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+  deletedAt      DateTime? @map("deleted_at")
+
+  company      Company       @relation(fields: [companyId], references: [id])
+  transactions Transaction[]
+  payments     Payment[]
+
+  @@index([companyId])
+  @@map("accounts")
+}
+
+// 员工 / 个人（收工资、报销、借款的自然人）
+model Person {
+  id          BigInt    @id @default(autoincrement())
+  companyId   BigInt?   @map("company_id")
+  name        String    @db.VarChar(50)
+  phone       String?   @db.VarChar(20)
+  // EMPLOYEE 正式员工 / CONTRACTOR 劳务 / OTHER
+  type        String    @default("EMPLOYEE") @db.VarChar(20)
+  bankAccount String?   @map("bank_account") @db.VarChar(64)
+  bankName    String?   @map("bank_name") @db.VarChar(100)
+  bankBranch  String?   @map("bank_branch") @db.VarChar(100)
+  cnaps       String?   @db.VarChar(32) // 联行号
+  monthSalary Decimal?  @map("month_salary") @db.Decimal(18, 2)
+  status      String    @default("ACTIVE") @db.VarChar(20)
+  remark      String?   @db.VarChar(500)
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+  deletedAt   DateTime? @map("deleted_at")
+
+  company        Company?        @relation(fields: [companyId], references: [id])
+  payrollItems   PayrollItem[]
+  reimbursements Reimbursement[]
+  loans          Loan[]
+
+  @@index([companyId])
+  @@map("persons")
+}
+
+model Customer {
+  id        BigInt    @id @default(autoincrement())
+  companyId BigInt?   @map("company_id")
+  name      String    @db.VarChar(120)
+  taxNo     String?   @map("tax_no") @db.VarChar(50)
+  contact   String?   @db.VarChar(50)
+  phone     String?   @db.VarChar(20)
+  status    String    @default("ACTIVE") @db.VarChar(20)
+  remark    String?   @db.VarChar(500)
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  company     Company?     @relation(fields: [companyId], references: [id])
+  receivables Receivable[]
+  invoices    Invoice[]
+  projects    Project[]
+
+  @@index([companyId])
+  @@map("customers")
+}
+
+model Supplier {
+  id          BigInt    @id @default(autoincrement())
+  companyId   BigInt?   @map("company_id")
+  name        String    @db.VarChar(120)
+  taxNo       String?   @map("tax_no") @db.VarChar(50)
+  contact     String?   @db.VarChar(50)
+  phone       String?   @db.VarChar(20)
+  bankAccount String?   @map("bank_account") @db.VarChar(64)
+  bankName    String?   @map("bank_name") @db.VarChar(100)
+  status      String    @default("ACTIVE") @db.VarChar(20)
+  remark      String?   @db.VarChar(500)
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+  deletedAt   DateTime? @map("deleted_at")
+
+  company  Company?  @relation(fields: [companyId], references: [id])
+  payables Payable[]
+  invoices Invoice[]
+
+  @@index([companyId])
+  @@map("suppliers")
+}
+
+model Project {
+  id         BigInt    @id @default(autoincrement())
+  companyId  BigInt    @map("company_id")
+  code       String?   @db.VarChar(32)
+  name       String    @db.VarChar(120)
+  customerId BigInt?   @map("customer_id")
+  budget     Decimal?  @db.Decimal(18, 2)
+  status     String    @default("ACTIVE") @db.VarChar(20)
+  remark     String?   @db.VarChar(500)
+  createdAt  DateTime  @default(now()) @map("created_at")
+  updatedAt  DateTime  @updatedAt @map("updated_at")
+  deletedAt  DateTime? @map("deleted_at")
+
+  company      Company       @relation(fields: [companyId], references: [id])
+  customer     Customer?     @relation(fields: [customerId], references: [id])
+  transactions Transaction[]
+  receivables  Receivable[]
+
+  @@index([companyId])
+  @@map("projects")
+}
+
+// 收入/支出分类（费用科目）
+model Category {
+  id        BigInt    @id @default(autoincrement())
+  kind      String    @db.VarChar(10) // IN 收入 / OUT 支出
+  name      String    @db.VarChar(50)
+  parentId  BigInt?   @map("parent_id")
+  sortOrder Int       @default(0) @map("sort_order")
+  status    String    @default("ACTIVE") @db.VarChar(20)
+  remark    String?   @db.VarChar(500)
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  transactions Transaction[]
+
+  @@unique([kind, name])
+  @@map("categories")
+}
+
+// =====================================================
+// 2. 核心事实：资金流水
+// =====================================================
+
+model Transaction {
+  id         BigInt   @id @default(autoincrement())
+  code       String   @unique @db.VarChar(32) // 业务编号 TXN-YYYYMM-0001
+  companyId  BigInt   @map("company_id")
+  accountId  BigInt   @map("account_id")
+  txnDate    DateTime @map("txn_date") @db.Date
+  direction  String   @db.VarChar(4) // IN 收 / OUT 支
+  amount     Decimal  @db.Decimal(18, 2) // 恒为正数，方向看 direction
+  currency   String   @default("CNY") @db.VarChar(8)
+
+  counterparty        String? @db.VarChar(120) // 对方名称
+  counterpartyAccount String? @map("counterparty_account") @db.VarChar(64)
+
+  // 业务类型：SALES_RECEIPT 客户回款 / SALARY 工资 / LABOR 劳务费 / REIMBURSE 报销 /
+  // PURCHASE 采购付款 / SERVICE 服务费 / TAX 税费 / RENT 房租 / SOFTWARE 软件云服务 /
+  // INTERCOMPANY 公司间往来 / LOAN 借款 / REPAY 还款 / TRANSFER 内部转账 /
+  // OTHER_IN 其他收入 / OTHER_OUT 其他支出
+  bizType    String  @map("biz_type") @db.VarChar(32)
+  categoryId BigInt? @map("category_id")
+  projectId  BigInt? @map("project_id")
+  invoiceId  BigInt? @map("invoice_id")
+
+  // 关联单据（付款单/收款/报销/工资/借款）
+  refType String? @map("ref_type") @db.VarChar(32)
+  refId   BigInt? @map("ref_id")
+
+  // 内部转账配对：转出与转入两条流水互指
+  transferPairId BigInt? @map("transfer_pair_id")
+
+  // UNRECONCILED 待核对 / RECONCILED 已核对 / ABNORMAL 异常
+  status        String    @default("UNRECONCILED") @db.VarChar(20)
+  importBatchId BigInt?   @map("import_batch_id")
+  dedupHash     String?   @map("dedup_hash") @db.VarChar(64) // 导入查重指纹
+  remark        String?   @db.VarChar(500)
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+  deletedAt     DateTime? @map("deleted_at")
+
+  company  Company      @relation(fields: [companyId], references: [id])
+  account  Account      @relation(fields: [accountId], references: [id])
+  category Category?    @relation(fields: [categoryId], references: [id])
+  project  Project?     @relation(fields: [projectId], references: [id])
+  invoice  Invoice?     @relation(fields: [invoiceId], references: [id])
+  batch    ImportBatch? @relation(fields: [importBatchId], references: [id])
+
+  payments        Payment[]
+  loanRepayments  LoanRepayment[]
+
+  @@index([companyId, txnDate])
+  @@index([accountId])
+  @@index([dedupHash])
+  @@index([refType, refId])
+  @@map("transactions")
+}
+
+model ImportBatch {
+  id           BigInt   @id @default(autoincrement())
+  companyId    BigInt   @map("company_id")
+  accountId    BigInt   @map("account_id")
+  fileName     String   @map("file_name") @db.VarChar(200)
+  rowCount     Int      @default(0) @map("row_count")
+  successCount Int      @default(0) @map("success_count")
+  skipCount    Int      @default(0) @map("skip_count")
+  status       String   @default("DONE") @db.VarChar(20)
+  remark       String?  @db.VarChar(500)
+  createdBy    String?  @map("created_by") @db.VarChar(50)
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  transactions Transaction[]
+
+  @@map("import_batches")
+}
+
+// =====================================================
+// 3. 收款 / 付款
+// =====================================================
+
+model Receivable {
+  id             BigInt    @id @default(autoincrement())
+  code           String    @unique @db.VarChar(32) // AR-YYYY-0001
+  companyId      BigInt    @map("company_id")
+  customerId     BigInt?   @map("customer_id")
+  projectId      BigInt?   @map("project_id")
+  contractNo     String?   @map("contract_no") @db.VarChar(64)
+  title          String    @db.VarChar(200)
+  amount         Decimal   @db.Decimal(18, 2)
+  receivedAmount Decimal   @default(0) @map("received_amount") @db.Decimal(18, 2)
+  expectDate     DateTime? @map("expect_date") @db.Date
+  actualDate     DateTime? @map("actual_date") @db.Date
+  // PENDING 待收款 / PARTIAL 部分收款 / RECEIVED 已收款 / WRITTEN_OFF 已核销 / CANCELLED
+  status         String    @default("PENDING") @db.VarChar(20)
+  confidence     String    @default("HIGH") @db.VarChar(20) // CONFIRMED / HIGH / ESTIMATE，用于现金预测
+  remark         String?   @db.VarChar(500)
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+  deletedAt      DateTime? @map("deleted_at")
+
+  company  Company   @relation(fields: [companyId], references: [id])
+  customer Customer? @relation(fields: [customerId], references: [id])
+  project  Project?  @relation(fields: [projectId], references: [id])
+
+  @@index([companyId, status])
+  @@map("receivables")
+}
+
+model Payable {
+  id         BigInt    @id @default(autoincrement())
+  code       String    @unique @db.VarChar(32) // AP-YYYY-0001
+  companyId  BigInt    @map("company_id")
+  supplierId BigInt?   @map("supplier_id")
+  payeeName  String    @map("payee_name") @db.VarChar(120)
+  bizType    String    @map("biz_type") @db.VarChar(32)
+  title      String    @db.VarChar(200)
+  amount     Decimal   @db.Decimal(18, 2)
+  paidAmount Decimal   @default(0) @map("paid_amount") @db.Decimal(18, 2)
+  dueDate    DateTime? @map("due_date") @db.Date
+  // PENDING 待付 / PARTIAL 部分付款 / PAID 已付清 / CANCELLED
+  status     String    @default("PENDING") @db.VarChar(20)
+  remark     String?   @db.VarChar(500)
+  createdAt  DateTime  @default(now()) @map("created_at")
+  updatedAt  DateTime  @updatedAt @map("updated_at")
+  deletedAt  DateTime? @map("deleted_at")
+
+  company  Company   @relation(fields: [companyId], references: [id])
+  supplier Supplier? @relation(fields: [supplierId], references: [id])
+  payments Payment[]
+
+  @@index([companyId, status])
+  @@map("payables")
+}
+
+// 付款单：草稿 → 待审批 → 待付款 → 已付款 → 已核对
+model Payment {
+  id        BigInt  @id @default(autoincrement())
+  code      String  @unique @db.VarChar(32) // PAY-YYYYMM-0001
+  companyId BigInt  @map("company_id")
+  accountId BigInt? @map("account_id")
+  payableId BigInt? @map("payable_id")
+
+  // SALARY 工资 / LABOR 劳务费 / REIMBURSE 报销 / SUPPLIER 供应商 / SERVICE 服务费 /
+  // TAX 税费 / INTERCOMPANY 公司间付款 / OTHER
+  payType        String  @map("pay_type") @db.VarChar(32)
+  payeeName      String  @map("payee_name") @db.VarChar(120)
+  payeeAccountNo String? @map("payee_account_no") @db.VarChar(64)
+  payeeBankName  String? @map("payee_bank_name") @db.VarChar(100)
+  amount         Decimal @db.Decimal(18, 2)
+  purpose        String? @db.VarChar(200)
+
+  planDate DateTime? @map("plan_date") @db.Date
+  paidDate DateTime? @map("paid_date") @db.Date
+
+  // 来源单据：PAYROLL / REIMBURSEMENT / PAYABLE / LOAN
+  sourceType String? @map("source_type") @db.VarChar(32)
+  sourceId   BigInt? @map("source_id")
+
+  transactionId BigInt?   @map("transaction_id")
+  approverId    BigInt?   @map("approver_id")
+  approverName  String?   @map("approver_name") @db.VarChar(50)
+  approvedAt    DateTime? @map("approved_at")
+
+  // DRAFT / PENDING_APPROVAL / APPROVED(待付款) / PAID / RECONCILED / REJECTED / CANCELLED
+  status    String    @default("DRAFT") @db.VarChar(20)
+  remark    String?   @db.VarChar(500)
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  company     Company      @relation(fields: [companyId], references: [id])
+  account     Account?     @relation(fields: [accountId], references: [id])
+  payable     Payable?     @relation(fields: [payableId], references: [id])
+  transaction Transaction? @relation(fields: [transactionId], references: [id])
+
+  @@index([companyId, status])
+  @@index([sourceType, sourceId])
+  @@map("payments")
+}
+
+// =====================================================
+// 4. 工资 / 报销
+// =====================================================
+
+model Payroll {
+  id          BigInt    @id @default(autoincrement())
+  code        String    @unique @db.VarChar(32) // PR-YYYYMM-01
+  companyId   BigInt    @map("company_id")
+  period      String    @db.VarChar(7) // YYYY-MM 工资所属月份
+  title       String?   @db.VarChar(120)
+  grossTotal  Decimal   @default(0) @map("gross_total") @db.Decimal(18, 2)
+  netTotal    Decimal   @default(0) @map("net_total") @db.Decimal(18, 2)
+  personCount Int       @default(0) @map("person_count")
+  payDate     DateTime? @map("pay_date") @db.Date
+  // DRAFT 草稿 / CONFIRMED 已确认 / PAID 已发放
+  status      String    @default("DRAFT") @db.VarChar(20)
+  remark      String?   @db.VarChar(500)
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+  deletedAt   DateTime? @map("deleted_at")
+
+  company Company       @relation(fields: [companyId], references: [id])
+  items   PayrollItem[]
+
+  @@index([companyId, period])
+  @@map("payrolls")
+}
+
+model PayrollItem {
+  id            BigInt   @id @default(autoincrement())
+  payrollId     BigInt   @map("payroll_id")
+  personId      BigInt?  @map("person_id")
+  name          String   @db.VarChar(50)
+  gross         Decimal  @default(0) @db.Decimal(18, 2) // 应发
+  deductSocial  Decimal  @default(0) @map("deduct_social") @db.Decimal(18, 2)
+  deductFund    Decimal  @default(0) @map("deduct_fund") @db.Decimal(18, 2)
+  deductTax     Decimal  @default(0) @map("deduct_tax") @db.Decimal(18, 2)
+  deductOther   Decimal  @default(0) @map("deduct_other") @db.Decimal(18, 2)
+  net           Decimal  @default(0) @db.Decimal(18, 2) // 实发
+  bankAccount   String?  @map("bank_account") @db.VarChar(64)
+  bankName      String?  @map("bank_name") @db.VarChar(100)
+  status        String   @default("NORMAL") @db.VarChar(20) // NORMAL / MISSING_ACCOUNT
+  remark        String?  @db.VarChar(500)
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  payroll Payroll @relation(fields: [payrollId], references: [id], onDelete: Cascade)
+  person  Person? @relation(fields: [personId], references: [id])
+
+  @@index([payrollId])
+  @@map("payroll_items")
+}
+
+model Reimbursement {
+  id            BigInt    @id @default(autoincrement())
+  code          String    @unique @db.VarChar(32) // EXP-YYYYMM-0001
+  companyId     BigInt    @map("company_id")
+  personId      BigInt?   @map("person_id")
+  applicantName String    @map("applicant_name") @db.VarChar(50)
+  category      String    @db.VarChar(50) // 交通/餐饮/办公/差旅...
+  amount        Decimal   @db.Decimal(18, 2)
+  expenseDate   DateTime? @map("expense_date") @db.Date
+  reason        String?   @db.VarChar(300)
+  // DRAFT / PENDING 待审批 / APPROVED 待付款 / PAID 已付款 / REJECTED
+  status        String    @default("PENDING") @db.VarChar(20)
+  paymentId     BigInt?   @map("payment_id")
+  transactionId BigInt?   @map("transaction_id")
+  remark        String?   @db.VarChar(500)
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+  deletedAt     DateTime? @map("deleted_at")
+
+  company Company   @relation(fields: [companyId], references: [id])
+  person  Person?   @relation(fields: [personId], references: [id])
+  invoices Invoice[]
+
+  @@index([companyId, status])
+  @@map("reimbursements")
+}
+
+// =====================================================
+// 5. 发票 / 借贷 / 附件
+// =====================================================
+
+model Invoice {
+  id          BigInt    @id @default(autoincrement())
+  companyId   BigInt    @map("company_id")
+  invoiceNo   String    @map("invoice_no") @db.VarChar(64) // 发票号码
+  invoiceCode String?   @map("invoice_code") @db.VarChar(64) // 发票代码
+  // SALES 销项 / PURCHASE 进项 / EXPENSE 费用发票 / RED 红字发票
+  type        String    @db.VarChar(20)
+  issueDate   DateTime? @map("issue_date") @db.Date
+  sellerName  String?   @map("seller_name") @db.VarChar(120)
+  buyerName   String?   @map("buyer_name") @db.VarChar(120)
+  amount      Decimal   @default(0) @db.Decimal(18, 2) // 不含税金额
+  taxAmount   Decimal   @default(0) @map("tax_amount") @db.Decimal(18, 2)
+  totalAmount Decimal   @default(0) @map("total_amount") @db.Decimal(18, 2) // 价税合计
+
+  customerId      BigInt? @map("customer_id")
+  supplierId      BigInt? @map("supplier_id")
+  reimbursementId BigInt? @map("reimbursement_id")
+
+  // PENDING 待处理 / BOOKED 已入账 / VOID 作废
+  status    String    @default("PENDING") @db.VarChar(20)
+  remark    String?   @db.VarChar(500)
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  company       Company        @relation(fields: [companyId], references: [id])
+  customer      Customer?      @relation(fields: [customerId], references: [id])
+  supplier      Supplier?      @relation(fields: [supplierId], references: [id])
+  reimbursement Reimbursement? @relation(fields: [reimbursementId], references: [id])
+  transactions  Transaction[]
+
+  @@unique([companyId, invoiceNo])
+  @@index([companyId, type, status])
+  @@map("invoices")
+}
+
+model Loan {
+  id        BigInt @id @default(autoincrement())
+  code      String @unique @db.VarChar(32) // LN-YYYY-0001
+  companyId BigInt @map("company_id")
+  // COMPANY_TO_PERSON 公司借给个人 / PERSON_TO_COMPANY 个人借给公司 /
+  // COMPANY_TO_COMPANY 公司间拆借 / ADVANCE 代付
+  direction String @db.VarChar(32)
+
+  counterpartyName String? @map("counterparty_name") @db.VarChar(120)
+  personId         BigInt? @map("person_id")
+  relatedCompanyId BigInt? @map("related_company_id")
+
+  principal    Decimal   @db.Decimal(18, 2)
+  repaidAmount Decimal   @default(0) @map("repaid_amount") @db.Decimal(18, 2)
+  interestRate Decimal?  @map("interest_rate") @db.Decimal(6, 3)
+  startDate    DateTime? @map("start_date") @db.Date
+  dueDate      DateTime? @map("due_date") @db.Date
+  // OPEN 未还清 / PARTIAL 部分归还 / CLOSED 已结清
+  status       String    @default("OPEN") @db.VarChar(20)
+  remark       String?   @db.VarChar(500)
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+  deletedAt    DateTime? @map("deleted_at")
+
+  company     Company         @relation(fields: [companyId], references: [id])
+  person      Person?         @relation(fields: [personId], references: [id])
+  repayments  LoanRepayment[]
+
+  @@index([companyId, status])
+  @@map("loans")
+}
+
+model LoanRepayment {
+  id            BigInt   @id @default(autoincrement())
+  loanId        BigInt   @map("loan_id")
+  repayDate     DateTime @map("repay_date") @db.Date
+  amount        Decimal  @db.Decimal(18, 2)
+  transactionId BigInt?  @map("transaction_id")
+  remark        String?  @db.VarChar(500)
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  loan        Loan         @relation(fields: [loanId], references: [id], onDelete: Cascade)
+  transaction Transaction? @relation(fields: [transactionId], references: [id])
+
+  @@index([loanId])
+  @@map("loan_repayments")
+}
+
+model Attachment {
+  id         BigInt   @id @default(autoincrement())
+  companyId  BigInt?  @map("company_id")
+  bizType    String   @map("biz_type") @db.VarChar(32) // INVOICE / REIMBURSEMENT / PAYMENT / TRANSACTION
+  bizId      BigInt?  @map("biz_id")
+  fileName   String   @map("file_name") @db.VarChar(200)
+  filePath   String   @map("file_path") @db.VarChar(300)
+  fileSize   Int      @default(0) @map("file_size")
+  mimeType   String?  @map("mime_type") @db.VarChar(100)
+  uploaderId BigInt?  @map("uploader_id")
+  remark     String?  @db.VarChar(500)
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  @@index([bizType, bizId])
+  @@map("attachments")
+}
+
+// =====================================================
+// 6. 月结 / 资金预测
+// =====================================================
+
+model ClosePeriod {
+  id            BigInt    @id @default(autoincrement())
+  companyId     BigInt    @map("company_id")
+  period        String    @db.VarChar(7) // YYYY-MM
+  // OPEN 未锁定 / CLOSED 已锁定
+  status        String    @default("OPEN") @db.VarChar(20)
+  incomeTotal   Decimal   @default(0) @map("income_total") @db.Decimal(18, 2)
+  expenseTotal  Decimal   @default(0) @map("expense_total") @db.Decimal(18, 2)
+  netCashFlow   Decimal   @default(0) @map("net_cash_flow") @db.Decimal(18, 2)
+  endingBalance Decimal   @default(0) @map("ending_balance") @db.Decimal(18, 2)
+  checklist     Json?     // 月结检查项快照
+  summaryMd     String?   @map("summary_md") @db.Text // Markdown 月结摘要
+  closedAt      DateTime? @map("closed_at")
+  closedBy      String?   @map("closed_by") @db.VarChar(50)
+  remark        String?   @db.VarChar(500)
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+  deletedAt     DateTime? @map("deleted_at")
+
+  company Company @relation(fields: [companyId], references: [id])
+
+  @@unique([companyId, period])
+  @@map("close_periods")
+}
+
+// 固定周期收支（房租/社保/云服务等），用于资金预测
+model ForecastItem {
+  id         BigInt    @id @default(autoincrement())
+  companyId  BigInt    @map("company_id")
+  name       String    @db.VarChar(120)
+  direction  String    @db.VarChar(4) // IN / OUT
+  amount     Decimal   @db.Decimal(18, 2)
+  frequency  String    @default("MONTHLY") @db.VarChar(20) // MONTHLY / QUARTERLY / ONCE
+  dayOfMonth Int       @default(1) @map("day_of_month")
+  startDate  DateTime? @map("start_date") @db.Date
+  endDate    DateTime? @map("end_date") @db.Date
+  confidence String    @default("HIGH") @db.VarChar(20) // CONFIRMED / HIGH / ESTIMATE
+  status     String    @default("ACTIVE") @db.VarChar(20)
+  remark     String?   @db.VarChar(500)
+  createdAt  DateTime  @default(now()) @map("created_at")
+  updatedAt  DateTime  @updatedAt @map("updated_at")
+  deletedAt  DateTime? @map("deleted_at")
+
+  company Company @relation(fields: [companyId], references: [id])
+
+  @@index([companyId])
+  @@map("forecast_items")
+}

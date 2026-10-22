@@ -1,0 +1,27 @@
+{
+  "name": "yihu-finance-backend",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "seed": "node prisma/seed.js",
+    "db:push": "prisma db push",
+    "test": "node --test --test-reporter=spec test/**/*.test.js",
+    "sync:fde": "node scripts/sync-fde.js"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.19.3",
+    "bcryptjs": "^3.0.2",
+    "cors": "^2.8.5",
+    "dayjs": "^1.11.13",
+    "dotenv": "^17.4.2",
+    "exceljs": "^4.4.0",
+    "express": "^4.21.2",
+    "jsonwebtoken": "^9.0.3",
+    "multer": "^2.0.2",
+    "prisma": "^6.19.3",
+    "xlsx": "^0.18.5",
+    "zod": "^4.4.3"
+  }
+}

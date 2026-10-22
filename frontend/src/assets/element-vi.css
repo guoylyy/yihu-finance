@@ -1,0 +1,64 @@
+/* Element Plus × 以虎 VI 主题覆盖：主色墨、功能色按 VI、圆角 8px */
+html:root {
+  --el-color-primary: #1c1917;
+  --el-color-primary-light-3: #3b3833;
+  --el-color-primary-light-5: #5c574f;
+  --el-color-primary-light-7: #a8a29a;
+  --el-color-primary-light-8: #d6d2ca;
+  --el-color-primary-light-9: #f0eee9;
+  --el-color-primary-dark-2: #000000;
+
+  --el-color-success: #2e7d4f;
+  --el-color-success-light-9: #eaf3ed;
+  --el-color-warning: #b3450f;
+  --el-color-warning-light-9: #f7ede6;
+  --el-color-danger: #c2362b;
+  --el-color-danger-light-9: #f9ebea;
+  --el-color-error: #c2362b;
+  --el-color-info: #8f8a82;
+
+  --el-border-radius-base: 8px;
+  --el-border-radius-small: 6px;
+  --el-border-color: #ddd9d2;
+  --el-border-color-light: #eae7e2;
+  --el-border-color-lighter: #f2f0eb;
+  --el-text-color-primary: #1c1917;
+  --el-text-color-regular: #5c574f;
+  --el-text-color-secondary: #8f8a82;
+  --el-fill-color-light: #faf9f7;
+  --el-fill-color-lighter: #faf9f7;
+  --el-bg-color-page: #faf9f7;
+  --el-font-family: 'Noto Sans SC', system-ui, -apple-system, 'PingFang SC', sans-serif;
+  --el-box-shadow-light: 0 2px 12px 0 rgba(28, 25, 23, 0.06);
+}
+
+.el-button.is-link.el-button--primary {
+  --el-button-text-color: #d2521e;
+  --el-button-hover-link-text-color: #b3450f;
+}
+
+.el-table th.el-table__cell {
+  background: #faf9f7; color: #8f8a82; font-weight: 600;
+}
+.el-table {
+  --el-table-border-color: #f2f0eb;
+  --el-table-header-bg-color: #faf9f7;
+  --el-table-row-hover-bg-color: #fdf8f6;
+}
+.el-table .cell { font-size: 13px; }
+
+.el-card { --el-card-border-color: #eae7e2; --el-card-border-radius: 10px; box-shadow: none !important; }
+.el-tag--plain { --el-tag-border-color: #ddd9d2; }
+.el-descriptions__label { color: #8f8a82; }
+.el-statistic__number { font-family: 'Manrope', system-ui, sans-serif; }
+
+/* 固定列在 hover 时防透视 */
+.el-table tr { --fin-row-bg: #fff; }
+.el-table .el-table__row:hover, .el-table tr.hover-row { --fin-row-bg: #fdf8f6; }
+.el-table thead tr { --fin-row-bg: #faf9f7; }
+.el-table td.el-table-fixed-column--right,
+.el-table td.el-table-fixed-column--left,
+.el-table th.el-table-fixed-column--right,
+.el-table th.el-table-fixed-column--left {
+  background-color: var(--fin-row-bg, #fff) !important;
+}
