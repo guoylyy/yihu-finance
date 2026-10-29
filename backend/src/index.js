@@ -23,6 +23,7 @@ import attachmentsRouter from './routes/fin/attachments.js'
 import usersRouter from './routes/fin/users.js'
 import auditLogsRouter from './routes/fin/audit-logs.js'
 import aiRouter from './routes/fin/ai.js'
+import assistantRouter from './routes/fin/assistant.js'
 import { auth } from './lib/auth.js'
 import { fileURLToPath } from 'url'
 import { mountPlatform, serveFrontend, callSelf } from './lib/platform.js'
@@ -62,6 +63,7 @@ app.use('/api/fin/attachments', attachmentsRouter)
 app.use('/api/fin/users', usersRouter)
 app.use('/api/fin/audit-logs', auditLogsRouter)
 app.use('/api/fin/ai', aiRouter)
+app.use('/api/fin/assistant', assistantRouter)   // 录入助手：只出草稿，不写库
 
 // ---------- 以虎 One 接入：统一登录 + AI 工具 ----------
 // 工具全部只读，以当前用户的角色和数据范围调用本系统接口（AI 助手不能付款、不能改账）

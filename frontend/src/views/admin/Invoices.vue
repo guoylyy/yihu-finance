@@ -12,6 +12,10 @@
     :default-form="{ type: 'PURCHASE', status: 'PENDING', amount: 0, taxAmount: 0, totalAmount: 0 }"
     :can-manage="can('invoice.manage')"
     search-placeholder="搜索发票号 / 开票方 / 受票方"
+    :action-width="170"
+    pin-type="invoice"
+    :pin-label="(r) => `发票 ${r.invoiceNo}`"
+    draft-kind="invoice"
   >
     <template #toolbar="{ reload }">
       <el-upload v-if="can('invoice.manage')" :auto-upload="false" :show-file-list="false"

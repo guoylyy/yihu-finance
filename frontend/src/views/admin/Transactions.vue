@@ -108,8 +108,9 @@
           </template>
         </el-table-column>
         <el-table-column prop="code" label="编号" width="140" />
-        <el-table-column label="操作" width="120" fixed="right">
+        <el-table-column label="操作" width="150" fixed="right">
           <template #default="{ row }">
+            <PinButton type="transaction" :id="row.id" :label="`${row.code} ${row.direction === 'IN' ? '+' : '−'}${money(row.amount)}`" />
             <el-button v-if="can('transaction.manage')" link type="primary" @click="openForm(row)">编辑</el-button>
             <el-button v-if="can('transaction.manage')" link type="danger" @click="remove(row)">作废</el-button>
           </template>
@@ -185,6 +186,8 @@ import { can } from '@/api/permissions'
 import { companies, categories, accountsOf, loadMeta } from '@/composables/useMeta'
 import { BIZ_TYPES, BIZ_LABEL, TXN_STATUS, labelOf, tagOf } from '@/constants'
 import { money, date } from '@/utils/format'
+import PinButton from '@/components/PinButton.vue'
+import { useDraftReceiver } from '@/stores/assistant'
 
 const route = useRoute()
 const loading = ref(false)
@@ -241,6 +244,19 @@ function openForm(row) {
     : { direction: 'OUT', bizType: 'OTHER_OUT', status: 'RECONCILED', txnDate: new Date().toISOString().slice(0, 10), amount: 0, companyId: q.company_id || companies.value[0]?.id }
   formVisible.value = true
 }
+
+// 录入助手「填入表单」：新增在默认值上预填；修改先取原流水再覆盖草稿字段
+async function openPrefill(p) {
+  try {
+    openForm(p.mode === 'update' && p.id ? await api.transactions.get(p.id) : null)
+    const v = { ...p.payload }
+    if (v.amount != null) v.amount = Number(v.amount)
+    form.value = { ...form.value, ...v }
+  } catch (e) {
+    ElMessage.error(e.message)
+  }
+}
+useDraftReceiver('transaction', { onPrefill: openPrefill, onRefresh: load })
 
 async function save() {
   saving.value = true

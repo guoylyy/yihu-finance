@@ -1,6 +1,7 @@
 <!--
   通用台账页：筛选 + 列表 + 分页 + 新增/编辑弹窗 + 作废
   各模块只描述「列」和「表单字段」，业务动作用 #row-actions / #toolbar 插槽补。
+  传 pin-type 时每行多一个「@」引用到录入助手；传 draft-kind 时接收助手的「填入表单」预填。
 -->
 <template>
   <div class="page">
@@ -60,9 +61,10 @@
           </template>
         </el-table-column>
 
-        <el-table-column v-if="canManage || $slots['row-actions']" label="操作"
+        <el-table-column v-if="canManage || $slots['row-actions'] || pinType" label="操作"
                          :width="actionWidth" fixed="right">
           <template #default="{ row }">
+            <PinButton v-if="pinType" :type="pinType" :id="row.id" :label="pinLabel ? pinLabel(row) : undefined" />
             <slot name="row-actions" :row="row" :reload="reload" />
             <el-button v-if="canManage && !hideEdit" link type="primary" @click="openForm(row)">编辑</el-button>
             <el-button v-if="canManage && !hideDelete" link type="danger" @click="remove(row)">作废</el-button>
@@ -107,6 +109,8 @@ import { ref, reactive, onMounted, onActivated } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { labelOf, tagOf } from '@/constants'
 import { money, date, datetime } from '@/utils/format'
+import PinButton from '@/components/PinButton.vue'
+import { useDraftReceiver } from '@/stores/assistant'
 
 const props = defineProps({
   api: { type: Object, required: true },
@@ -129,7 +133,11 @@ const props = defineProps({
   hideDelete: Boolean,
   beforeSave: Function,
   // 保存成功后的回调：(row, form, isCreate) => Promise，用于顺带做后续动作
-  afterSave: Function
+  afterSave: Function,
+  // 录入助手：pinType 为 @ 引用的记录类型，pinLabel(row) 为胶囊上显示的文字；draftKind 为可接收的草稿类型
+  pinType: String,
+  pinLabel: Function,
+  draftKind: String
 })
 const emit = defineEmits(['loaded'])
 
@@ -195,6 +203,30 @@ function openForm(row) {
   formVisible.value = true
 }
 
+// 助手草稿「填入表单」：新增直接预填；修改先取原记录再覆盖草稿里的字段
+function toFormValues(payload) {
+  const f = { ...payload }
+  for (const field of props.formFields) {
+    const v = f[field.prop]
+    if (v == null) continue
+    if (field.type === 'money' || field.type === 'number') f[field.prop] = Number(v)
+    if (field.type === 'select' && !field.multiple) f[field.prop] = String(v)
+  }
+  return f
+}
+
+async function openPrefill(p) {
+  try {
+    if (p.mode === 'update' && p.id) openForm(await props.api.get(p.id))
+    else openForm()
+    form.value = { ...form.value, ...toFormValues(p.payload) }
+  } catch (e) {
+    ElMessage.error(e.message)
+  }
+}
+
+if (props.draftKind) useDraftReceiver(props.draftKind, { onPrefill: openPrefill, onRefresh: () => load() })
+
 async function save() {
   const payload = props.beforeSave ? props.beforeSave(form.value) : form.value
   if (!payload) return
@@ -228,5 +260,5 @@ onMounted(load)
 // 列表页被 keep-alive 缓存着，从别的页面回来要重新拉一次，
 // 否则会看到别处已经改过的旧数据（比如刚登记完回款，余额还是老的）
 onActivated(load)
-defineExpose({ reload, load, openForm, selection, clearSelection: () => tableRef.value?.clearSelection() })
+defineExpose({ reload, load, openForm, openPrefill, selection, clearSelection: () => tableRef.value?.clearSelection() })
 </script>

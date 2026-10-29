@@ -58,7 +58,7 @@
       </el-menu>
     </el-aside>
 
-    <el-container>
+    <el-container class="main-col">
       <el-header class="topbar">
         <div class="crumb">
           <span class="title">{{ route.meta.title || '集团财务系统' }}</span>
@@ -68,6 +68,16 @@
           </el-tag>
         </div>
         <div class="right">
+          <el-tooltip v-if="can('finance.view')" placement="bottom"
+                      :content="assistant.status.available ? (assistant.open ? '收起录入助手' : '打开录入助手') : `录入助手不可用：${assistant.status.reason}`">
+            <span>
+              <el-button text circle :disabled="!assistant.status.available"
+                         :class="{ 'is-on': assistant.open && assistant.status.available }"
+                         @click="assistant.open = !assistant.open">
+                <el-icon :size="17"><ChatDotRound /></el-icon>
+              </el-button>
+            </span>
+          </el-tooltip>
           <el-tooltip content="使用手册与每月 SOP" placement="bottom">
             <el-button text circle @click="router.push('/guide')">
               <el-icon :size="17"><QuestionFilled /></el-icon>
@@ -96,6 +106,8 @@
         </router-view>
       </el-main>
     </el-container>
+
+    <AssistantDrawer v-if="can('finance.view') && assistant.open && assistant.status.available" />
   </el-container>
 </template>
 
@@ -107,11 +119,14 @@ import api, { getUser, clearAuth } from '@/api'
 import { can, setPermissions, ROLE_LABELS } from '@/api/permissions'
 import { loadMeta, resetMeta } from '@/composables/useMeta'
 import { getPlatformHome } from '@/api/base'
+import AssistantDrawer from '@/components/AssistantDrawer.vue'
+import { useAssistantStore } from '@/stores/assistant'
 
 const route = useRoute()
 const router = useRouter()
 const user = ref(getUser())
 const anomalyCount = ref(0)
+const assistant = useAssistantStore()
 
 onMounted(async () => {
   try {
@@ -119,12 +134,23 @@ onMounted(async () => {
     setPermissions(me.permissions)
     user.value = me.user
     await loadMeta()
+    if (can('finance.view')) loadAssistantStatus()
     const a = await api.ai.anomalies()
     anomalyCount.value = a.anomalies.filter((x) => x.level !== 'info').length
   } catch (e) {
     if (!String(e.message).includes('未登录')) ElMessage.warning(e.message)
   }
 })
+
+// 录入助手是否可用（平台没配模型时入口置灰并说明原因）
+async function loadAssistantStatus() {
+  try {
+    const s = await api.assistant.status()
+    assistant.status = { available: s.available, reason: s.reason || '', stub: !!s.stub }
+  } catch (e) {
+    assistant.status = { available: false, reason: e.message }
+  }
+}
 
 function onCommand(cmd) {
   if (cmd === 'profile') return router.push('/profile')
@@ -141,6 +167,7 @@ function onCommand(cmd) {
 
 <style scoped>
 .layout { height: 100vh; }
+.main-col { min-width: 0; }
 .sidebar {
   background: var(--surface);
   border-right: 1px solid var(--border);
@@ -173,4 +200,6 @@ function onCommand(cmd) {
 .user { display: flex; align-items: center; gap: 8px; cursor: pointer; outline: none; }
 .uname { font-size: 14px; }
 .main { background: var(--bg); padding: 18px 20px; overflow-y: auto; }
+.right { display: flex; align-items: center; gap: 4px; }
+.right .is-on { color: var(--accent); }
 </style>

@@ -39,6 +39,7 @@ export function auth(req, res, next) {
  * 需求文档 §4：AI 助手与业务人员均不得直接触发付款
  */
 export const PERMISSIONS = {
+  'finance.view':       ['ADMIN', 'FINANCE', 'MANAGER', 'VIEWER'],   // 录入助手（只出草稿，写入仍按各模块 manage 权限）
   'dashboard.view':     ['ADMIN', 'FINANCE', 'MANAGER', 'VIEWER'],
   'company.view':       ['ADMIN', 'FINANCE', 'MANAGER', 'VIEWER'],
   'company.manage':     ['ADMIN'],

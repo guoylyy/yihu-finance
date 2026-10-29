@@ -11,7 +11,10 @@
     :filters="filters"
     :default-form="{ status: 'PENDING', confidence: 'HIGH', amount: 0, received: false, receiptDate: today }"
     :can-manage="can('receivable.manage')"
-    :action-width="170"
+    :action-width="200"
+    pin-type="receivable"
+    :pin-label="(r) => `${r.code} ${r.title}`"
+    draft-kind="receivable"
     search-placeholder="搜索编号 / 标题 / 合同号"
     :before-save="beforeSave"
     :after-save="afterSave"
@@ -55,6 +58,14 @@
       </div>
     </template>
 
+    <template #[`col-customer.name`]="{ row }">
+      <template v-if="row.customer">
+        {{ row.customer.name }}
+        <PinButton type="customer" :id="row.customer.id" :label="row.customer.name" />
+      </template>
+      <span v-else>—</span>
+    </template>
+
     <template #col-amount="{ row }">
       <div class="money">{{ money(row.amount) }}</div>
       <div class="muted" style="font-size: 12px">已收 {{ money(row.receivedAmount) }}</div>
@@ -94,6 +105,7 @@
 import { ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import CrudTable from '@/components/CrudTable.vue'
+import PinButton from '@/components/PinButton.vue'
 import api from '@/api'
 import { can } from '@/api/permissions'
 import { companies, accountsOf, loadMeta } from '@/composables/useMeta'

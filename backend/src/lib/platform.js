@@ -90,7 +90,7 @@ export function mountPlatform(app, { resolveUser, signFor, tools = [], appName =
  */
 export async function callSelf(token, url, params = {}) {
   const q = new URLSearchParams(Object.entries(params).filter(([, v]) => v !== undefined && v !== null && v !== ''))
-  const r = await fetch(`http://127.0.0.1:${process.env.PORT || 3000}${url}${q.size ? `?${q}` : ''}`, { headers: { Authorization: `Bearer ${token}` } })
+  const r = await fetch(`http://127.0.0.1:${process.env.PORT || 3010}${url}${q.size ? `?${q}` : ''}`, { headers: { Authorization: `Bearer ${token}` } })
   const j = await r.json().catch(() => ({}))
   if (j.code !== 0) throw new Error(j.message || `HTTP ${r.status}`)
   return j.data

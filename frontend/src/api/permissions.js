@@ -1,5 +1,6 @@
 // 前端权限：与后端 lib/auth.js 的 PERMISSIONS 矩阵保持一致
 // 登录后由 /api/auth/me 下发生效权限点，这里只做缓存与判断
+// finance.view：录入助手入口（v1.1 新增，后端 PERMISSIONS 同步加了这一项）
 import { ref } from 'vue'
 
 const perms = ref([])

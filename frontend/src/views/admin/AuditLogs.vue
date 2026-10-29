@@ -64,13 +64,15 @@ const ENTITIES = [
   { value: 'invoice', label: '发票' }, { value: 'loan', label: '借款' },
   { value: 'account', label: '账户' }, { value: 'company', label: '公司' },
   { value: 'closePeriod', label: '月结' }, { value: 'user', label: '用户' },
-  { value: 'transfer', label: '内部转账' }, { value: 'attachment', label: '附件' }
+  { value: 'transfer', label: '内部转账' }, { value: 'attachment', label: '附件' },
+  { value: 'assistant', label: '录入助手' }
 ]
 const ACTIONS = [
   { value: 'CREATE', label: '新增' }, { value: 'UPDATE', label: '修改' }, { value: 'DELETE', label: '作废' },
   { value: 'APPROVE', label: '审批' }, { value: 'REJECT', label: '驳回' }, { value: 'SUBMIT', label: '提交' },
   { value: 'PAY', label: '付款' }, { value: 'IMPORT', label: '导入' },
-  { value: 'CLOSE', label: '月结' }, { value: 'REOPEN', label: '解锁' }, { value: 'CANCEL', label: '取消' }
+  { value: 'CLOSE', label: '月结' }, { value: 'REOPEN', label: '解锁' }, { value: 'CANCEL', label: '取消' },
+  { value: 'assistant.chat', label: '助手对话' }
 ]
 const ACTION_TAG = { CREATE: 'success', DELETE: 'danger', PAY: 'warning', APPROVE: 'success', REJECT: 'danger', CLOSE: 'warning', REOPEN: 'danger' }
 

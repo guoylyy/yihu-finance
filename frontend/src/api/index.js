@@ -189,6 +189,11 @@ export const api = {
   ai: {
     monthlyReport: (p) => get(`${B}/ai/monthly-report`, p),
     anomalies: (p) => get(`${B}/ai/anomalies`, p)
+  },
+  // 录入助手：只返回草稿，写入仍走上面各模块的 create / update
+  assistant: {
+    status: () => get(`${B}/assistant/status`),
+    chat: (b) => request(`${B}/assistant/chat`, { method: 'POST', body: JSON.stringify(b || {}), timeout: 65000 })
   }
 }
 

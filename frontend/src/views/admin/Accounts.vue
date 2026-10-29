@@ -58,8 +58,9 @@
             <span class="muted" style="font-size: 12px"> · {{ date(row.initialDate) }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="180" fixed="right">
+        <el-table-column label="操作" width="210" fixed="right">
           <template #default="{ row }">
+            <PinButton type="account" :id="row.id" :label="`${c.code} ${row.name}`" />
             <el-button link type="primary" @click="reconcile(row)">对账</el-button>
             <el-button link type="primary" @click="$router.push({ path: '/transactions', query: { account_id: row.id } })">流水</el-button>
             <el-button v-if="can('account.manage')" link type="primary" @click="openForm(row, c)">编辑</el-button>
@@ -165,6 +166,8 @@ import { can } from '@/api/permissions'
 import { companies, accounts, loadMeta } from '@/composables/useMeta'
 import { ACCOUNT_TYPES, ACCOUNT_TYPE_LABEL } from '@/constants'
 import { money, date } from '@/utils/format'
+import PinButton from '@/components/PinButton.vue'
+import { useDraftReceiver } from '@/stores/assistant'
 
 const summary = ref({})
 const saving = ref(false)
@@ -191,6 +194,20 @@ function openForm(row, company) {
     : { type: 'BANK', currency: 'CNY', initialBalance: 0, isPrimary: false, companyId: companies.value[0]?.id }
   formVisible.value = true
 }
+
+// 录入助手「填入表单」：新增在默认值上预填；修改先取原记录再覆盖草稿字段
+async function openPrefill(p) {
+  try {
+    const base = p.mode === 'update' && p.id ? await api.accounts.get(p.id) : null
+    openForm(base, base && { companyId: String(base.companyId) })
+    const v = { ...p.payload }
+    if (v.initialBalance != null) v.initialBalance = Number(v.initialBalance)
+    form.value = { ...form.value, ...v }
+  } catch (e) {
+    ElMessage.error(e.message)
+  }
+}
+useDraftReceiver('account', { onPrefill: openPrefill, onRefresh: load })
 
 async function save() {
   saving.value = true
