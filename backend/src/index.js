@@ -115,6 +115,11 @@ serveFrontend(app, path.resolve(path.dirname(fileURLToPath(import.meta.url)), '.
 app.use((req, res) => res.status(404).json({ code: 9004, message: `接口不存在：${req.method} ${req.path}`, data: null }))
 
 app.use((err, req, res, next) => {
+  // 请求体不是合法 JSON、超过大小限制等是客户端的错：按 4xx 回，不当成服务器故障
+  const status = err.status || err.statusCode || 500
+  if (status < 500) {
+    return res.status(status).json({ code: 9002, message: err.type === 'entity.parse.failed' ? '请求体不是合法的 JSON' : err.message, data: null })
+  }
   console.error('[unhandled]', err)
   res.status(500).json({ code: 9001, message: err.message || '服务器内部错误', data: null })
 })

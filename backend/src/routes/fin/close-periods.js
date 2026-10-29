@@ -11,7 +11,7 @@ import { round2 } from '../../lib/money.js'
 const router = express.Router()
 
 router.get('/', requirePermission('close.view'), wrap(async (req, res) => {
-  const where = { deletedAt: null, ...scopeWhere(req.user) }
+  const where = { deletedAt: null, AND: [scopeWhere(req.user)] } // 范围放 AND，下面的 company_id 不能覆盖它
   if (req.query.company_id) where.companyId = BigInt(req.query.company_id)
   if (req.query.period) where.period = req.query.period
   const list = await prisma.closePeriod.findMany({

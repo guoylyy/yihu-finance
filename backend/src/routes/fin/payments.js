@@ -32,7 +32,7 @@ const FLOW = {
 // 待付款清单（导出银行/财务使用）
 router.get('/plan', requirePermission('payment.view'), wrap(async (req, res) => {
   const where = {
-    deletedAt: null, ...scopeWhere(req.user),
+    deletedAt: null, AND: [scopeWhere(req.user)], // 范围放 AND，下面的 company_id 不能覆盖它
     status: 'APPROVED'
   }
   if (req.query.company_id) where.companyId = BigInt(req.query.company_id)

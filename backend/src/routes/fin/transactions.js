@@ -3,8 +3,8 @@ import express from 'express'
 import multer from 'multer'
 import prisma from '../../lib/prisma.js'
 import { Prisma } from '@prisma/client'
-import { requirePermission, scopeWhere } from '../../lib/auth.js'
-import { ok, badRequest, notFound, wrap } from '../../lib/response.js'
+import { requirePermission, scopeWhere, inScope } from '../../lib/auth.js'
+import { ok, badRequest, notFound, forbidden, wrap } from '../../lib/response.js'
 import { toDate } from '../../lib/period.js'
 import { nextCode } from '../../lib/code.js'
 import { recalcAccountBalance } from '../../lib/balance.js'
@@ -25,7 +25,7 @@ const INCLUDE = {
 
 function buildWhere(req) {
   const q = req.query
-  const where = { deletedAt: null, ...scopeWhere(req.user) }
+  const where = { deletedAt: null, AND: [scopeWhere(req.user)] } // 范围放 AND，下面的 company_id 不能覆盖它
   if (q.company_id) where.companyId = BigInt(q.company_id)
   if (q.account_id) where.accountId = BigInt(q.account_id)
   if (q.project_id) where.projectId = BigInt(q.project_id)
@@ -99,7 +99,7 @@ router.get('/:id', requirePermission('transaction.view'), wrap(async (req, res) 
   const row = await prisma.transaction.findFirst({
     where: { id: BigInt(req.params.id), deletedAt: null }, include: INCLUDE
   })
-  if (!row) return notFound(res)
+  if (!row || !inScope(req.user, row.companyId)) return notFound(res)
   return ok(res, row)
 }))
 
@@ -119,11 +119,26 @@ function pickTxn(body) {
   return data
 }
 
+// 写入前的校验：方向、金额（正数、到分）、数据范围、账户必须属于该公司
+async function checkTxn(req, { companyId, accountId, direction, amount }) {
+  if (direction !== undefined && !['IN', 'OUT'].includes(direction)) return '收支方向只能是 IN 或 OUT'
+  if (amount !== undefined && !/^\d+(\.\d{1,2})?$/.test(String(amount).trim())) return '金额格式不对（正数，最多两位小数）'
+  if (amount !== undefined && !new Prisma.Decimal(String(amount).trim()).gt(0)) return '金额必须大于 0'
+  if (!inScope(req.user, companyId)) return { forbidden: '无权在该公司下记流水' }
+  const account = await prisma.account.findFirst({ where: { id: BigInt(accountId), deletedAt: null }, select: { companyId: true } })
+  if (!account) return '账户不存在'
+  if (String(account.companyId) !== String(companyId)) return '账户不属于该公司'
+  return null
+}
+const sendErr = (res, err) => (err.forbidden ? forbidden(res, err.forbidden) : badRequest(res, err))
+
 router.post('/', requirePermission('transaction.manage'), wrap(async (req, res) => {
   const { companyId, accountId, txnDate, direction, amount } = req.body || {}
   if (!companyId || !accountId || !txnDate || !direction || !amount) {
     return badRequest(res, '公司、账户、日期、收支方向和金额为必填')
   }
+  const err = await checkTxn(req, { companyId, accountId, direction, amount })
+  if (err) return sendErr(res, err)
   const locked = await assertPeriodOpen(companyId, txnDate)
   if (locked) return badRequest(res, locked)
 
@@ -138,9 +153,15 @@ router.post('/', requirePermission('transaction.manage'), wrap(async (req, res) 
 router.put('/:id', requirePermission('transaction.manage'), wrap(async (req, res) => {
   const id = BigInt(req.params.id)
   const before = await prisma.transaction.findFirst({ where: { id, deletedAt: null } })
-  if (!before) return notFound(res)
+  if (!before || !inScope(req.user, before.companyId)) return notFound(res)
   const locked = await assertPeriodOpen(before.companyId, before.txnDate)
   if (locked) return badRequest(res, locked)
+  const b = req.body || {}
+  const err = await checkTxn(req, {
+    companyId: b.companyId ?? before.companyId, accountId: b.accountId ?? before.accountId,
+    direction: b.direction, amount: b.amount
+  })
+  if (err) return sendErr(res, err)
 
   const row = await prisma.transaction.update({ where: { id }, data: pickTxn(req.body), include: INCLUDE })
   await recalcAccountBalance(row.accountId)
@@ -152,7 +173,7 @@ router.put('/:id', requirePermission('transaction.manage'), wrap(async (req, res
 router.delete('/:id', requirePermission('transaction.manage'), wrap(async (req, res) => {
   const id = BigInt(req.params.id)
   const before = await prisma.transaction.findFirst({ where: { id, deletedAt: null } })
-  if (!before) return notFound(res)
+  if (!before || !inScope(req.user, before.companyId)) return notFound(res)
   const locked = await assertPeriodOpen(before.companyId, before.txnDate)
   if (locked) return badRequest(res, locked)
 

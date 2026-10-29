@@ -21,7 +21,8 @@ router.get('/monthly-report', requirePermission('analytics.view'), wrap(async (r
  * 需求 §10-12：发现缺失账号、重复发票和未核对流水
  */
 router.get('/anomalies', requirePermission('analytics.view'), wrap(async (req, res) => {
-  const scope = req.query.company_id ? { companyId: BigInt(req.query.company_id) } : scopeWhere(req.user)
+  // 指定公司时也要和数据范围取交集，否则能指定别家公司
+  const scope = req.query.company_id ? { AND: [scopeWhere(req.user), { companyId: BigInt(req.query.company_id) }] } : scopeWhere(req.user)
   const period = req.query.period || nowPeriod()
   const { start, end } = periodRange(period)
   const anomalies = []

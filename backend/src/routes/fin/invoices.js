@@ -24,7 +24,7 @@ const INCLUDE = {
 
 // 统计：待处理 / 未入账
 router.get('/stats', requirePermission('invoice.view'), wrap(async (req, res) => {
-  const where = { deletedAt: null, ...scopeWhere(req.user) }
+  const where = { deletedAt: null, AND: [scopeWhere(req.user)] } // 范围放 AND，下面的 company_id 不能覆盖它
   if (req.query.company_id) where.companyId = BigInt(req.query.company_id)
   const [byType, pending, dup] = await Promise.all([
     prisma.invoice.groupBy({ by: ['type'], where, _sum: { totalAmount: true, taxAmount: true }, _count: true }),

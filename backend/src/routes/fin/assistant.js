@@ -47,7 +47,8 @@ async function loadPinned(list, user) {
     const bid = BigInt(id)
     let summary = null
     if (type === 'company') {
-      const r = await prisma.company.findFirst({ where: { id: bid, deletedAt: null, ...scopeWhere(user, 'id') } })
+      // scopeWhere(user, 'id') 也写 id 字段，必须放进 AND，否则会覆盖 id: bid
+      const r = await prisma.company.findFirst({ where: { id: bid, deletedAt: null, AND: [scopeWhere(user, 'id')] } })
       if (r) summary = `公司 id=${id}：${r.code}（${r.name}）`
     } else if (type === 'customer') {
       const r = await prisma.customer.findFirst({ where: { id: bid, deletedAt: null } })
@@ -125,6 +126,8 @@ function scoped(row, user) {
 
 const toOpenAI = (name, description, parameters) => ({ type: 'function', function: { name, description, parameters } })
 
+const KNOWN_TOOLS = new Set([...READ_TOOLS.map((t) => t.name), ...DRAFT_KINDS.map((k) => `draft_${k}`)])
+
 function toolsFor(draftsAllowed) {
   const list = READ_TOOLS.map((t) => toOpenAI(t.name, t.description, t.parameters))
   if (draftsAllowed) {
@@ -181,13 +184,14 @@ router.post('/chat', requirePermission('finance.view'), wrap(async (req, res) =>
   const drafts = []
   const warnings = []
   const toolNames = []
+  let rejectedTools = 0
   let reply = ''
 
   const audit = (extra = {}) => logAudit(req, {
     action: 'assistant.chat', entity: 'assistant',
     summary: `录入助手｜页面 ${route || '-'}｜${drafts.length ? `草稿 ${drafts.map((d) => d.kind).join('、')}` : '无草稿'}${pinned.length ? `｜引用 ${pinned.map((p) => `${p.type}:${p.id}`).join('、')}` : ''}`,
     // 只记元信息：不记对话原文、不记草稿里的金额
-    after: { route, drafted: drafts.length > 0, kinds: drafts.map((d) => d.kind), pinned: pinned.map((p) => `${p.type}:${p.id}`), tools: toolNames, stub, ...extra }
+    after: { route, drafted: drafts.length > 0, kinds: drafts.map((d) => d.kind), pinned: pinned.map((p) => `${p.type}:${p.id}`), tools: toolNames, ...(rejectedTools ? { rejectedTools } : {}), stub, ...extra }
   })
 
   if (!avail.available) {
@@ -202,7 +206,9 @@ router.post('/chat', requirePermission('finance.view'), wrap(async (req, res) =>
   const deadline = Date.now() + TIMEOUT_MS
 
   async function runTool(name, args) {
-    toolNames.push(name)
+    // 审计只记白名单内的工具名：模型给的名字是任意字符串，不能原样进审计，只记个数
+    if (KNOWN_TOOLS.has(name)) toolNames.push(name)
+    else rejectedTools++
     if (name.startsWith('draft_')) {
       const kind = name.slice(6)
       if (!draftsAllowed || !DRAFT_KINDS.includes(kind)) return { error: '当前页面不支持生成草稿' }

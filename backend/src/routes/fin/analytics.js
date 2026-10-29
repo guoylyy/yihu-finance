@@ -14,7 +14,8 @@ function scopeSql(req, alias = 't') {
   const ids = req.user?.companyScope
   const parts = [`${a}deleted_at IS NULL`]
   if (req.query.company_id) parts.push(`${a}company_id = ${Number(req.query.company_id)}`)
-  else if (Array.isArray(ids) && ids.length) parts.push(`${a}company_id IN (${ids.map(Number).join(',')})`)
+  // 数据范围始终叠加（不是 else）：指定了公司也不能越出范围
+  if (Array.isArray(ids) && ids.length) parts.push(`${a}company_id IN (${ids.map(Number).join(',')})`)
   return parts.join(' AND ')
 }
 

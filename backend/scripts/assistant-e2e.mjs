@@ -1,161 +1,159 @@
-// 录入助手端到端检查（本地 / CI）：需要后端以 FIN_LLM_STUB=1 启动并已 seed
-//   FIN_LLM_STUB=1 npm start
-//   node scripts/assistant-e2e.mjs [--fixtures]
-// --fixtures：客户不足 12 个时补建演示客户（让「客户 12」存在），只建在测试库上用
-import assert from 'node:assert/strict'
-import dayjs from 'dayjs'
+// 录入助手端到端测试 runner。用法见 scripts/README.md
+//   node scripts/assistant-e2e.mjs                 stub 全量（默认；后端需以 FIN_LLM_STUB=1 启动）
+//   node scripts/assistant-e2e.mjs --live          真实模型：只断言结构与安全属性
+//   node scripts/assistant-e2e.mjs --read-only     不写库：生产冒烟（可与 --live 叠加）
+//   node scripts/assistant-e2e.mjs --cleanup-stale 清掉上次跑崩留下的 E2E- 测试数据
+// 写库模式只在自建的两家测试公司（E2E-<时间戳>-A/B）里写，测试用户的数据范围也只限这两家；跑完硬删除
+import fs from 'node:fs'
+import path from 'node:path'
+import { parseOptions, makeHttp, makeRunner, openDb, countRows, purge, residual, findStale, BACKEND_DIR, ROOT_DIR } from './tests/lib.mjs'
+import { createFixtures } from './tests/fixtures.mjs'
+import { chromeAvailable } from './tests/browser.mjs'
 
-const BASE = process.env.E2E_BASE_URL || `http://127.0.0.1:${process.env.PORT || 3010}`
-const withFixtures = process.argv.includes('--fixtures')
-let failed = 0
+const GROUPS = [
+  ['S', '冒烟', 's-smoke'], ['A', '四类草稿全覆盖', 'a-drafts'], ['B', '修改模式', 'b-update'], ['C', '数据范围与越权', 'c-scope'],
+  ['D', '权限矩阵', 'd-perms'], ['E', '降级（mock 上游）', 'e-degrade'], ['F', '安全', 'f-security'], ['G', '边界值', 'g-boundary'],
+  ['H', '幂等与并发', 'h-concurrency'], ['I', '业务回归', 'i-business'], ['J', '性能基线', 'j-perf']
+]
 
-async function http(method, path, token, body) {
-  const r = await fetch(BASE + path, {
-    method,
-    headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-    body: body ? JSON.stringify(body) : undefined
-  })
-  return { status: r.status, json: await r.json().catch(() => ({})) }
+const opts = parseOptions(process.argv.slice(2))
+if (opts.help) {
+  console.log(fs.readFileSync(new URL(import.meta.url), 'utf8').split('\n').filter((l) => l.startsWith('//')).join('\n'))
+  process.exit(0)
 }
-const login = async (u, p) => (await http('POST', '/api/auth/login', null, { username: u, password: p })).json.data.token
-const chat = (token, text, context = { route: '/receivables', pinned: [] }) =>
-  http('POST', '/api/fin/assistant/chat', token, { messages: [{ role: 'user', content: text }], context })
+const mode = opts.live ? 'live' : 'stub'
+const write = !opts.readOnly
+const api = makeHttp(opts.base)
+const startedAt = new Date()
 
-async function check(name, fn) {
-  try { await fn(); console.log(`✔ ${name}`) } catch (e) { failed++; console.log(`✘ ${name}\n  ${e.message}`) }
+console.log(`录入助手 E2E · ${opts.base} · ${mode}${write ? '' : ' · 只读'}`)
+
+// ---------- 数据库（只有写库模式需要） ----------
+let db = null
+let dbUrl = null
+if (write || opts.cleanupStale) {
+  const r = await openDb()
+  if (!r.db) { console.error(`✘ 写库模式需要直连被测服务的数据库（用来建数前后比对行数、硬删除测试数据）：${r.reason}\n  只想跑不写库的检查请加 --read-only`); process.exit(2) }
+  db = r.db
+  dbUrl = r.url
 }
 
-const admin = await login('admin', 'admin123')
-const staff = await login('staff', 'staff123')
+if (opts.cleanupStale) {
+  const stale = await findStale(db)
+  console.log(`残留测试公司 ${stale.companies.map((c) => c.code).join('、') || '无'}；测试用户 ${stale.users.map((u) => u.username).join('、') || '无'}`)
+  if (stale.companyIds.length || stale.userIds.length) console.log('已删除：', await purge(db, { ...stale, keepAudit: opts.keepAudit }))
+  await db.$disconnect()
+  process.exit(0)
+}
 
-if (withFixtures) {
-  const names = ['栗海贸易', '栗海科技', '北辰物流', '南屿咨询', '东篱文化', '西岭数据', '白鹭传媒', '青禾农业', '远山建设', '晨星医疗', '暮云软件', '栗海贸易']
-  const { json } = await http('GET', '/api/fin/customers?page_size=100', admin)
-  for (let i = json.data.total; i < 12; i++) {
-    // 第 12 个客户固定叫「栗海贸易」，第 1 / 2 个用于测同名模糊匹配
-    await http('POST', '/api/fin/customers', admin, { name: i === 11 ? '栗海贸易' : names[i] })
+// ---------- 引导身份 ----------
+let token = opts.token
+let me
+try {
+  if (!token) token = (await api.login(opts.user, opts.pass)).token
+  me = (await api.data('GET', '/api/auth/me', token)).user
+} catch (e) {
+  console.error(`✘ 拿不到登录身份：${e.message}\n  用 --token <jwt> 传入，或 --user/--pass（默认 admin/admin123）`)
+  process.exit(2)
+}
+console.log(`身份：${me.username}（${me.role}${me.companyScope ? `，范围 ${me.companyScope.join(',')}` : '，全部公司'}）${opts.token ? ' · 来自 --token' : ' · 自动登录'}`)
+
+const status = await api.http('GET', '/api/fin/assistant/status', token)
+if (status.json.code === 0) {
+  const s = status.json.data
+  if (opts.live && s.stub) { console.error('✘ --live 要求后端不开 FIN_LLM_STUB（当前是 stub）'); process.exit(2) }
+  if (!opts.live && !s.stub) { console.error('✘ 默认模式要求后端以 FIN_LLM_STUB=1 启动（当前接的是真实模型）；要跑真实模型请加 --live'); process.exit(2) }
+  if (opts.live && !s.available) { console.error(`✘ 助手不可用：${s.reason}`); process.exit(2) }
+}
+if (write && me.role !== 'ADMIN') { console.error('✘ 写库模式需要 ADMIN 身份来建测试公司与测试用户'); process.exit(2) }
+
+// ---------- 环境能力 ----------
+const isLocal = ['127.0.0.1', 'localhost', '::1'].includes(new URL(opts.base).hostname)
+const caps = new Set([mode, write ? 'write' : 'readonly'])
+if (db) caps.add('db')
+if (write && isLocal && fs.existsSync(path.join(BACKEND_DIR, 'src/index.js'))) caps.add('spawn')
+let uiOk = false
+try { uiOk = (await fetch(`${opts.ui}/login`)).ok } catch { /* 前端没托管 */ }
+if (chromeAvailable(opts.chrome) && uiOk) caps.add('browser')
+const env = { has: (c) => caps.has(c), groupTitle: Object.fromEntries(GROUPS.map(([g, title]) => [g, title])) }
+console.log(`能力：${[...caps].join(' / ')}${caps.has('browser') ? '' : `（无头浏览器不可用：${chromeAvailable(opts.chrome) ? `前端 ${opts.ui} 打不开` : `找不到 Chrome ${opts.chrome}`}）`}`)
+
+const runner = makeRunner(opts, env)
+const prefix = `E2E-${Date.now().toString(36)}`
+const track = { companyIds: [], userIds: [] }
+const t = { opts, api, check: runner.check, log: runner.log, notes: runner.notes, perf: runner.perf, env, mode, write, db, dbUrl, token, me, fx: null }
+
+let before = null
+let after = null
+let removed = null
+let left = null
+let fatal = null
+
+const cleanup = async () => {
+  if (!write || !db || removed) return
+  removed = await purge(db, { ...track, keepAudit: opts.keepAudit })
+  left = await residual(db, { ...track, prefix })
+  after = await countRows(db)
+}
+process.on('SIGINT', async () => { console.log('\n中断，清理测试数据…'); await cleanup().catch((e) => console.error(e)); process.exit(130) })
+
+try {
+  if (write) {
+    before = await countRows(db)
+    t.fx = await createFixtures(api, token, prefix, track)
+    // 确认直连的库就是被测服务用的库：刚通过接口建的公司在库里能查到
+    const hit = await db.company.findFirst({ where: { code: `${prefix}-A` } })
+    if (!hit) throw new Error('DATABASE_URL 指向的库里查不到刚通过接口建的测试公司：被测服务和本脚本连的不是同一个库')
+    console.log(`测试数据前缀 ${prefix}：公司 ${track.companyIds.join(',')}，用户 ${track.userIds.length} 个`)
   }
-  // 客户 12 归属云帆科技（公司 1），用来验证「所属公司按客户带出」
-  const c12 = (await http('GET', '/api/fin/customers/12', admin)).json.data
-  if (c12 && !c12.companyId) await http('PUT', '/api/fin/customers/12', admin, { companyId: '1' })
+  for (const [, , file] of GROUPS) {
+    const mod = await import(`./tests/${file}.mjs`)
+    await mod.default(t)
+  }
+} catch (e) {
+  fatal = e
+  console.error(`\n✘ 运行中断：${e.stack || e.message}`)
+} finally {
+  await cleanup().catch((e) => { console.error('✘ 清理失败：', e); fatal ||= e })
+  await db?.$disconnect()
 }
 
-const eom = dayjs().endOf('month').format('YYYY-MM-DD')
-
-await check('status：stub 模式可用', async () => {
-  const { json } = await http('GET', '/api/fin/assistant/status', admin)
-  assert.equal(json.code, 0)
-  assert.equal(json.data.available, true)
-  assert.equal(json.data.stub, true)
-})
-
-let full
-await check('完整应收 → drafts[0].kind === receivable 且字段齐全', async () => {
-  const { json } = await chat(admin, '录一笔应收：客户 12，金额 128000，月底到期')
-  assert.equal(json.code, 0, json.message)
-  const d = json.data.drafts[0]
-  full = d
-  console.log('  reply:', json.data.reply)
-  console.log('  draft:', JSON.stringify(d))
-  assert.equal(d.kind, 'receivable')
-  assert.deepEqual(d.missing, [])
-  assert.equal(d.payload.customerId, '12')
-  assert.equal(d.payload.amount, '128000.00')
-  assert.equal(d.payload.expectDate, eom)
-  for (const k of ['companyId', 'customerId', 'title', 'amount', 'expectDate', 'confidence']) assert.ok(d.payload[k], `缺少 ${k}`)
-  assert.equal(d.payload.companyId, '1')
-  assert.ok(d.warnings.some((w) => w.includes('按客户带出')))
-})
-
-await check('页面筛选里的 company_id 作为公司提示（服务端校验）', async () => {
-  const { json } = await chat(admin, '录一笔应收：金额 900，月底到期', { route: '/receivables', pinned: [], filters: { company_id: '2' } })
-  assert.equal(json.data.drafts[0].payload.companyId, '2')
-})
-
-await check('缺金额 → missing 含 amount', async () => {
-  const { json } = await chat(admin, '录一笔应收：客户 12，月底到期')
-  const d = json.data.drafts[0]
-  console.log('  reply:', json.data.reply, '| missing:', d.missing)
-  assert.ok(d.missing.includes('amount'))
-  assert.equal(d.payload.amount, undefined)
-})
-
-for (const bad of ['-5', 'abc', '12.345', '0']) {
-  await check(`金额 ${bad} → 进 warnings / missing，payload 不带非法金额`, async () => {
-    const { json } = await chat(admin, `录一笔应收：客户 12，金额 ${bad}，月底到期`)
-    const d = json.data.drafts[0]
-    console.log('  missing:', d.missing, '| warnings:', d.warnings)
-    assert.ok(d.missing.includes('amount'))
-    assert.ok(d.warnings.some((w) => w.includes('应收金额')))
-    assert.equal(d.payload.amount, undefined)
-  })
+// ---------- 汇总 ----------
+const { results, notes, perf } = runner
+const n = (s) => results.filter((r) => r.status === s).length
+console.log(`\n通过 ${n('PASS')} / 失败 ${n('FAIL')} / 跳过 ${n('SKIP')}${fatal ? ' / 运行中断' : ''}`)
+if (notes.length) console.log(`\n记录：\n${notes.map((x) => `  · ${x}`).join('\n')}`)
+let rowsTable = ''
+if (before && after) {
+  const diff = Object.keys(before).filter((k) => before[k] !== after[k])
+  rowsTable = ['| 表 | 测试前 | 清理后 | 差 |', '|---|---:|---:|---:|', ...Object.keys(before).map((k) => `| ${k} | ${before[k]} | ${after[k]} | ${after[k] - before[k] || ''} |`)].join('\n')
+  console.log(`\n清理：硬删除 ${JSON.stringify(removed)}`)
+  console.log(`残留测试行：${Object.keys(left || {}).length ? JSON.stringify(left) : '0'}`)
+  console.log(diff.length ? `⚠ 行数与测试前不一致：${diff.map((k) => `${k} ${before[k]}→${after[k]}`).join('，')}（若测试期间有人在录数据，这是正常的；残留测试行为 0 才是判据）` : '各表行数与测试前完全一致')
 }
 
-await check('名称匹配到多个 → warnings + candidates', async () => {
-  const { json } = await chat(admin, '录一笔应收：客户 栗海，金额 5000，月底到期')
-  const d = json.data.drafts[0]
-  console.log('  warnings:', d.warnings, '| candidates:', JSON.stringify(d.candidates.customerId))
-  assert.ok(d.warnings.some((w) => /匹配到 \d+ 个/.test(w)))
-  assert.ok(d.candidates.customerId.length >= 2)
-})
+// ---------- 报告：只替换本模式那一段，人工写的部分不动 ----------
+if (opts.report && !opts.only) {
+  const key = `${mode}${write ? '' : '-readonly'}`
+  const lines = [
+    `### 自动结果：${key}（${startedAt.toLocaleString('zh-CN', { hour12: false })}，${opts.base}）`, '',
+    `通过 **${n('PASS')}** / 失败 **${n('FAIL')}** / 跳过 ${n('SKIP')}${fatal ? ` / ⚠ 运行中断：${fatal.message}` : ''}`, '',
+    '| 组 | 检查项 | 结果 | 说明 |', '|---|---|---|---|',
+    ...results.map((r) => `| ${r.group} | ${r.name.replace(/\|/g, '\\|')} | ${{ PASS: '✅', FAIL: '❌', SKIP: '⏭' }[r.status]} | ${(r.detail || '').replace(/\|/g, '\\|').replace(/\n/g, ' ')} |`),
+    '',
+    ...(Object.keys(perf).length ? ['**性能**', '', ...Object.entries(perf).map(([k, v]) => `- ${k}：p50 ${v.p50} ms，p95 ${v.p95} ms（${v.runs.join(' / ')} ms）`), ''] : []),
+    ...(notes.length ? ['**现状记录**', '', ...notes.map((x) => `- ${x}`), ''] : []),
+    ...(rowsTable ? ['**测试数据清理**', '', `前缀 \`${prefix}\`；硬删除 \`${JSON.stringify(removed)}\`；残留测试行 ${Object.keys(left || {}).length ? `\`${JSON.stringify(left)}\`` : '**0**'}`, '', rowsTable, ''] : [])
+  ].join('\n')
+  const file = opts.report
+  let doc = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '# 录入助手测试报告\n'
+  const begin = `<!-- AUTO:${key}:BEGIN -->`
+  const end = `<!-- AUTO:${key}:END -->`
+  const block = `${begin}\n${lines}\n${end}`
+  doc = doc.includes(begin) ? doc.replace(new RegExp(`${begin}[\\s\\S]*?${end}`), () => block) : `${doc.trimEnd()}\n\n${block}\n`
+  fs.mkdirSync(path.dirname(file), { recursive: true })
+  fs.writeFileSync(file, doc)
+  console.log(`\n报告已写入 ${path.relative(ROOT_DIR, file)}（段落 ${key}）`)
+}
 
-await check('pinned 伪造 id / 非法类型被服务端忽略，合法的按库里数据重查', async () => {
-  const { json } = await chat(admin, '录一笔应收：金额 100，月底到期', {
-    route: '/receivables', pinned: [{ type: 'customer', id: '12' }, { type: 'customer', id: '99999' }, { type: 'user', id: '1' }, { type: 'customer', id: '1 OR 1=1' }]
-  })
-  const d = json.data.drafts[0]
-  assert.equal(d.payload.customerId, '12')
-  assert.equal(d.labels.customerId, '栗海贸易')
-})
-
-await check('非录入页面（/dashboard）不出草稿', async () => {
-  const { json } = await chat(admin, '录一笔应收：客户 12，金额 128000，月底到期', { route: '/dashboard', pinned: [] })
-  assert.equal(json.data.drafts.length, 0)
-})
-
-await check('流水草稿：账户按 @ 引用带出公司，金额两位小数', async () => {
-  const acc = (await http('GET', '/api/fin/accounts?page_size=1', admin)).json.data.list[0]
-  const { json } = await chat(admin, '记一笔支出：金额 3200.5，对方 某某物业，摘要 10 月物业费', { route: '/transactions', pinned: [{ type: 'account', id: acc.id }] })
-  const d = json.data.drafts[0]
-  console.log('  draft:', JSON.stringify(d.payload), d.missing)
-  assert.equal(d.kind, 'transaction')
-  assert.equal(d.payload.amount, '3200.50')
-  assert.equal(d.payload.companyId, String(acc.companyId))
-  assert.equal(d.payload.bizType, 'OTHER_OUT')
-  assert.deepEqual(d.missing, [])
-})
-
-await check('发票草稿：补齐不含税金额', async () => {
-  const { json } = await chat(admin, '录一张进项发票：发票号 E2E20261028，金额 10600，税额 600，今天开的', { route: '/invoices', pinned: [{ type: 'company', id: '1' }] })
-  const d = json.data.drafts[0]
-  console.log('  draft:', JSON.stringify(d.payload), d.missing)
-  assert.equal(d.kind, 'invoice')
-  assert.equal(d.payload.amount, '10000.00')
-  assert.deepEqual(d.missing, [])
-})
-
-await check('草稿可直接提交给现有 REST 创建接口（模拟「确认提交」）', async () => {
-  const { json } = await http('POST', '/api/fin/receivables', admin, full.payload)
-  assert.equal(json.code, 0, json.message)
-  assert.equal(json.data.amount, '128000')
-  console.log('  created:', json.data.code, json.data.title, json.data.amount)
-})
-
-await check('audit_logs 里有 assistant.chat，且不含对话原文', async () => {
-  const { json } = await http('GET', '/api/fin/audit-logs?action=assistant.chat&page_size=3', admin)
-  assert.ok(json.data.total > 0)
-  const row = json.data.list[0]
-  console.log('  latest:', row.action, '|', row.summary, '|', JSON.stringify(row.after))
-  assert.ok(!JSON.stringify(row).includes('128000'))
-})
-
-await check('无 finance.view 的用户（STAFF）→ 403', async () => {
-  const r = await chat(staff, '录一笔应收：客户 12，金额 128000，月底到期')
-  console.log('  HTTP', r.status, JSON.stringify(r.json))
-  assert.equal(r.status, 403)
-  const s = await http('GET', '/api/fin/assistant/status', staff)
-  assert.equal(s.status, 403)
-})
-
-console.log(failed ? `\n${failed} 项失败` : '\n全部通过')
-process.exit(failed ? 1 : 0)
+process.exit(n('FAIL') || fatal ? 1 : 0)

@@ -5,7 +5,7 @@ import { z } from 'zod'
 import dayjs from 'dayjs'
 import prisma from './prisma.js'
 import { scopeWhere, inScope } from './auth.js'
-import { dec, parseAmount } from './money.js'
+import { dec } from './money.js'
 import { toDate } from './period.js'
 import { assertPeriodOpen } from './close.js'
 
@@ -22,18 +22,23 @@ const BIZ_OUT = ['SALARY', 'LABOR', 'REIMBURSE', 'PURCHASE', 'SERVICE', 'TAX', '
 const idSchema = z.union([z.string(), z.number()]).transform(String).pipe(z.string().regex(/^[1-9]\d{0,17}$/, '必须是正整数 id'))
 const str = (max) => z.union([z.string(), z.number()]).transform((v) => String(v).trim()).pipe(z.string().min(1, '不能为空').max(max, `不能超过 ${max} 个字`))
 
-/** 金额：返回两位小数的字符串（交给后端按 Decimal(18,2) 入库），不做浮点运算 */
+/** 金额：返回两位小数的字符串（交给后端按 Decimal(18,2) 入库）。全程按字符串 + Decimal 处理，不经过浮点：
+ *  大额（> 2^53 分）不丢分；十六进制、科学计数法这类「Number() 认、财务上不认」的写法一律拒绝 */
+const FULL_WIDTH = { '０': '0', '１': '1', '２': '2', '３': '3', '４': '4', '５': '5', '６': '6', '７': '7', '８': '8', '９': '9', '．': '.', '，': ',', '－': '-' }
 function moneySchema({ allowZero = false, allowNegative = false } = {}) {
   return z.union([z.string(), z.number()]).transform((v, ctx) => {
-    const raw = String(v).trim()
-    const n = parseAmount(raw)
-    if (n == null || !Number.isFinite(n)) { ctx.addIssue({ code: 'custom', message: '不是有效金额' }); return z.NEVER }
-    const decimals = raw.replace(/[¥￥,\s元()]/g, '').split('.')[1]
-    if (decimals && decimals.length > 2) { ctx.addIssue({ code: 'custom', message: '最多两位小数（到分）' }); return z.NEVER }
-    if (n < 0 && !allowNegative) { ctx.addIssue({ code: 'custom', message: '不能为负数' }); return z.NEVER }
-    if (n === 0 && !allowZero) { ctx.addIssue({ code: 'custom', message: '必须大于 0' }); return z.NEVER }
-    if (Math.abs(n) >= 1e16) { ctx.addIssue({ code: 'custom', message: '超出金额范围' }); return z.NEVER }
-    return dec(n).toFixed(2)
+    let s = String(v).trim().replace(/[０-９．，－]/g, (c) => FULL_WIDTH[c])
+    let negative = false
+    if (/^\(.*\)$/.test(s)) { negative = true; s = s.slice(1, -1) }
+    s = s.replace(/[¥￥,\s元]/g, '')
+    if (s.startsWith('-')) { negative = !negative; s = s.slice(1) }
+    if (!/^(\d+(\.\d*)?|\.\d+)$/.test(s)) { ctx.addIssue({ code: 'custom', message: '不是有效金额' }); return z.NEVER }
+    if ((s.split('.')[1] || '').length > 2) { ctx.addIssue({ code: 'custom', message: '最多两位小数（到分）' }); return z.NEVER }
+    const n = dec(s)
+    if (n.isZero() && !allowZero) { ctx.addIssue({ code: 'custom', message: '必须大于 0' }); return z.NEVER }
+    if (negative && !n.isZero() && !allowNegative) { ctx.addIssue({ code: 'custom', message: '不能为负数' }); return z.NEVER }
+    if (n.gte('1e16')) { ctx.addIssue({ code: 'custom', message: '超出金额范围' }); return z.NEVER }
+    return (negative && !n.isZero() ? n.negated() : n).toFixed(2)
   })
 }
 
@@ -123,7 +128,8 @@ const short = (v) => { const s = typeof v === 'string' ? v : JSON.stringify(v); 
 async function loadRef(ref, id, user) {
   const bid = BigInt(id)
   if (ref === 'company') {
-    const r = await prisma.company.findFirst({ where: { id: bid, deletedAt: null, ...scopeWhere(user, 'id') }, select: { id: true, code: true, name: true } })
+    // 数据范围放进 AND：scopeWhere(user, 'id') 也写 id 字段，直接展开会覆盖 id: bid，变成「范围内任意一家」
+    const r = await prisma.company.findFirst({ where: { id: bid, deletedAt: null, AND: [scopeWhere(user, 'id')] }, select: { id: true, code: true, name: true } })
     return r && { row: r, label: r.code }
   }
   if (ref === 'customer') {
@@ -174,10 +180,11 @@ export async function buildDraft(kind, args, user) {
   // 修改模式：带 id 时先确认这条记录存在、在数据范围内
   let mode = 'create'
   let id = null
+  let existing = null
   if (args.id !== undefined && args.id !== null && args.id !== '') {
     const p = idSchema.safeParse(args.id)
     const row = p.success && await prisma[spec.model].findFirst({ where: { id: BigInt(p.data), deletedAt: null, ...scopeWhere(user) } })
-    if (row) { mode = 'update'; id = p.data } else warnings.push(`要修改的${spec.label}（id ${short(args.id)}）不存在或无权访问，已按新增处理`)
+    if (row) { mode = 'update'; id = p.data; existing = row } else warnings.push(`要修改的${spec.label}（id ${short(args.id)}）不存在或无权访问，已按新增处理`)
   }
 
   for (const fd of spec.fields) {
@@ -205,21 +212,34 @@ export async function buildDraft(kind, args, user) {
   }
 
   // ---------- 联动与跨字段校验 ----------
-  // 公司没给时，按客户 / 账户 / 项目的归属带出；用户只能看一家公司时直接用它
+  // 公司没给时，按客户 / 账户 / 项目的归属带出；用户只能看一家公司、且没指定过公司时直接用它
+  // （指定了公司但被拒绝——不存在或无权访问——不能悄悄换成另一家，否则会把 B 公司的账记到 A 公司）
+  const companyAsked = ['company_id', 'companyId', 'company_name'].some((k) => args[k] !== undefined && args[k] !== null && args[k] !== '')
   if (!payload.companyId) {
     const from = ['accountId', 'projectId', 'customerId'].find((k) => refRows[k]?.companyId)
     if (from) {
       const c = await loadRef('company', String(refRows[from].companyId), user)
       if (c) { payload.companyId = String(c.row.id); labels.companyId = c.label; warnings.push(`所属公司按${fieldLabels(kind)[from]}带出为「${c.label}」，请核对`) }
-    } else if (mode === 'create') {
+    } else if (mode === 'create' && !companyAsked) {
       const list = await prisma.company.findMany({ where: { deletedAt: null, status: 'ACTIVE', ...scopeWhere(user, 'id') }, select: { id: true, code: true }, take: 6 })
       if (list.length === 1) { payload.companyId = String(list[0].id); labels.companyId = list[0].code }
       else if (list.length > 1) candidates.companyId = list.map((c) => ({ id: String(c.id), label: c.code }))
     }
   }
+  // 引用的客户 / 项目 / 账户必须和记录属于同一家公司（模型可能填了别家公司的 id；客户不挂公司的视为通用）
+  const targetCompany = payload.companyId || (existing?.companyId != null ? String(existing.companyId) : null)
+  if (targetCompany) {
+    for (const k of ['customerId', 'projectId']) {
+      const r = refRows[k]
+      if (r?.companyId && String(r.companyId) !== targetCompany) {
+        warnings.push(`${fieldLabels(kind)[k]}「${labels[k]}」不属于所选公司，已移除${fieldLabels(kind)[k]}`)
+        delete payload[k]; delete labels[k]; delete refRows[k]
+      }
+    }
+  }
   if (kind === 'transaction') {
     const acc = refRows.accountId
-    if (acc && payload.companyId && String(acc.companyId) !== String(payload.companyId)) {
+    if (acc && targetCompany && String(acc.companyId) !== targetCompany) {
       warnings.push(`账户「${acc.name}」不属于所选公司，已移除账户`)
       delete payload.accountId; delete labels.accountId
     }
@@ -249,6 +269,13 @@ export async function buildDraft(kind, args, user) {
     else if (taxAmount == null && totalAmount != null && amount != null) payload.taxAmount = dec(totalAmount).minus(amount).toFixed(2)
     else if (amount != null && taxAmount != null && totalAmount != null && !dec(amount).plus(taxAmount).eq(totalAmount)) {
       warnings.push(`不含税金额 + 税额 ≠ 价税合计（${amount} + ${taxAmount} ≠ ${totalAmount}），请核对`)
+    }
+    // 修改模式只改了其中一两个金额时，和库里原值合起来再核对一次（否则改完价税合计，不含税金额和税额还是旧的）
+    if (mode === 'update' && ['amount', 'taxAmount', 'totalAmount'].some((k) => payload[k] != null)) {
+      const m = Object.fromEntries(['amount', 'taxAmount', 'totalAmount'].map((k) => [k, payload[k] ?? existing[k]]))
+      if (m.amount != null && m.taxAmount != null && m.totalAmount != null && !dec(m.amount).plus(m.taxAmount).eq(m.totalAmount)) {
+        warnings.push(`修改后 不含税金额 + 税额 ≠ 价税合计（${dec(m.amount).toFixed(2)} + ${dec(m.taxAmount).toFixed(2)} ≠ ${dec(m.totalAmount).toFixed(2)}），请一并修改`)
+      }
     }
     if (mode === 'create' && payload.amount == null && payload.totalAmount == null) missing.push('amount')
     if (mode === 'create' && payload.companyId && payload.invoiceNo) {

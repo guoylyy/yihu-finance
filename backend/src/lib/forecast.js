@@ -7,7 +7,8 @@ import { scopeWhere } from './auth.js'
 import { round2 } from './money.js'
 
 export async function forecast(user, { days = [30, 60, 90], companyId } = {}) {
-  const scope = companyId ? { companyId: BigInt(companyId) } : scopeWhere(user)
+  // 指定公司时也要和数据范围取交集，否则能指定别家公司
+  const scope = companyId ? { AND: [scopeWhere(user), { companyId: BigInt(companyId) }] } : scopeWhere(user)
   const today = dayjs().startOf('day')
   const maxDay = Math.max(...days)
   const horizon = today.add(maxDay, 'day')

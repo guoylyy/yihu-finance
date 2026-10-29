@@ -3,8 +3,8 @@
 // 统一在这里生成，具体模块只写自己的业务动作（审批、付款、核对…）
 import express from 'express'
 import prisma from './prisma.js'
-import { ok, badRequest, notFound, wrap } from './response.js'
-import { requirePermission, scopeWhere } from './auth.js'
+import { ok, badRequest, notFound, forbidden, wrap } from './response.js'
+import { requirePermission, scopeWhere, inScope } from './auth.js'
 import { logAudit } from './audit.js'
 import { toDate } from './period.js'
 
@@ -46,6 +46,9 @@ export function crudRouter(cfg) {
   const router = express.Router()
   const db = () => prisma[model]
 
+  // 数据范围：列表按 scopeWhere 过滤；详情 / 新增 / 编辑 / 作废同样只认可见公司的记录（不挂公司的记录视为通用）
+  const visible = (row, req) => !scoped || row?.companyId == null || inScope(req.user, row.companyId)
+
   const isBigint = (k) => bigintFields.includes(k) || (/Id$/.test(k) && k !== 'id')
 
   function pickData(body) {
@@ -69,7 +72,8 @@ export function crudRouter(cfg) {
     const take = Math.min(Number(page_size) || 20, 500)
     const skip = (Number(page) - 1) * take
 
-    const where = { deletedAt: null, ...(scoped ? scopeWhere(req.user) : {}) }
+    // 数据范围放进 AND：下面的 company_id / filters 会写 where.companyId，直接展开会被覆盖，变成能查别家公司
+    const where = { deletedAt: null, ...(scoped ? { AND: [scopeWhere(req.user)] } : {}) }
     if (company_id) where.companyId = BigInt(company_id)
 
     for (const [q, field] of Object.entries(filters)) {
@@ -95,7 +99,7 @@ export function crudRouter(cfg) {
   // ── 详情 ──
   router.get('/:id', requirePermission(perms.view), wrap(async (req, res) => {
     const row = await db().findFirst({ where: { id: BigInt(req.params.id), deletedAt: null }, include })
-    if (!row) return notFound(res)
+    if (!row || !visible(row, req)) return notFound(res)
     return ok(res, row)
   }))
 
@@ -105,6 +109,7 @@ export function crudRouter(cfg) {
     if (missing.length) return badRequest(res, `缺少必填字段：${missing.join('、')}`)
 
     let data = pickData(req.body)
+    if (!visible(data, req)) return forbidden(res, '无权在该公司下新增记录')
     if (hooks.beforeCreate) {
       const r = await hooks.beforeCreate(data, req)
       if (r?.error) return badRequest(res, r.error)
@@ -120,9 +125,10 @@ export function crudRouter(cfg) {
   router.put('/:id', requirePermission(perms.manage), wrap(async (req, res) => {
     const id = BigInt(req.params.id)
     const before = await db().findFirst({ where: { id, deletedAt: null } })
-    if (!before) return notFound(res)
+    if (!before || !visible(before, req)) return notFound(res)
 
     let data = pickData(req.body)
+    if (!visible(data, req)) return forbidden(res, '无权把记录改到该公司下')
     if (hooks.beforeUpdate) {
       const r = await hooks.beforeUpdate(data, req, before)
       if (r?.error) return badRequest(res, r.error)
@@ -138,7 +144,7 @@ export function crudRouter(cfg) {
   router.delete('/:id', requirePermission(perms.manage), wrap(async (req, res) => {
     const id = BigInt(req.params.id)
     const before = await db().findFirst({ where: { id, deletedAt: null } })
-    if (!before) return notFound(res)
+    if (!before || !visible(before, req)) return notFound(res)
     const row = await db().update({ where: { id }, data: { deletedAt: new Date() } })
     await logAudit(req, { action: 'DELETE', entity, entityId: id, summary: `作废${entity}`, before })
     if (hooks.afterWrite) await hooks.afterWrite(row, req, 'DELETE', before)

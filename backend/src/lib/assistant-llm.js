@@ -75,11 +75,25 @@ function detectKind(text, ctx) {
   return null
 }
 
+const AMOUNT_RE = /金额\s*(?:改成|改为|调整为|是|为|[:：])?\s*([^\s，。；;、]+)/
+// 修改已有记录时金额落在哪个字段
+const EDIT_AMOUNT_KEY = { account: 'initialBalance', receivable: 'amount', invoice: 'totalAmount', transaction: 'amount' }
+
+// 「把金额改成 2000」：要改的记录取「#id」或当前页面类型的 @ 引用，只传说到的字段
+function stubEdit(text, ctx) {
+  const kind = ctx.pageKind
+  const id = pick(text, /#\s*(\d+)/) || pinnedId(ctx, kind)
+  if (!kind || !id) return []
+  const amount = pick(text, AMOUNT_RE)
+  return [call(`draft_${kind}`, { id, ...(amount ? { [EDIT_AMOUNT_KEY[kind]]: amount } : {}) })]
+}
+
 function stubPlan(text, ctx) {
+  if (ctx.draftsAllowed && /改成|改为|调整为/.test(text)) return stubEdit(text, ctx)
   const kind = ctx.draftsAllowed ? detectKind(text, ctx) : null
   if (!kind) return []
   // 金额：保留原文交给草稿校验（-5 / abc 这类非法值应被校验挡下来，而不是在这里被「修正」）
-  const amount = pick(text, /金额\s*(?:是|为|[:：])?\s*([^\s，。；;、]+)/)
+  const amount = pick(text, AMOUNT_RE)
   const date = parseDate(text)
   const calls = []
   if (kind === 'receivable') {
@@ -90,8 +104,11 @@ function stubPlan(text, ctx) {
     if (cname) { args.customer_name = cname; calls.push(call('list_customers', { keyword: cname })) }
     const contract = pick(text, /合同(?:号)?\s*[:：]?\s*([A-Za-z0-9-]+)/)
     if (contract) args.contractNo = contract
-    args.title = contract ? `合同 ${contract} 款项` : '应收款'
-    if (pinnedId(ctx, 'company')) args.company_id = pinnedId(ctx, 'company')
+    // 「款项说明 无」用来模拟用户没说款项说明（测 missing.title）
+    const title = pick(text, /(?:款项说明|标题)\s*[:：]?\s*([^\s，,。；;]+)/)
+    if (title !== '无') args.title = title || (contract ? `合同 ${contract} 款项` : '应收款')
+    const companyId = pick(text, /公司\s*[:：]?\s*(\d+)/) || pinnedId(ctx, 'company')
+    if (companyId) args.company_id = companyId
     if (pinnedId(ctx, 'receivable') && /改|修改|更新/.test(text)) args.id = pinnedId(ctx, 'receivable')
     calls.push(call('draft_receivable', args))
   } else if (kind === 'invoice') {
@@ -101,7 +118,8 @@ function stubPlan(text, ctx) {
       issueDate: date, totalAmount: amount,
       taxAmount: pick(text, /税额\s*(?:是|为|[:：])?\s*([^\s，。；;、]+)/),
       sellerName: pick(text, /开票方\s*[:：]?\s*([^\s，,。；;]+)/),
-      company_id: pinnedId(ctx, 'company')
+      amount: pick(text, /不含税(?:金额)?\s*(?:是|为|[:：])?\s*([^\s，。；;、]+)/),
+      company_id: pick(text, /公司\s*[:：]?\s*(\d+)/) || pinnedId(ctx, 'company')
     }
     const cid = pick(text, /客户\s*[:：]?\s*(\d+)/) || pinnedId(ctx, 'customer')
     if (cid) args.customer_id = cid
@@ -113,19 +131,20 @@ function stubPlan(text, ctx) {
       account_id: pick(text, /账户\s*[:：]?\s*(\d+)/) || pinnedId(ctx, 'account'),
       counterparty: pick(text, /对方\s*[:：]?\s*([^\s，,。；;]+)/),
       summary: pick(text, /摘要\s*[:：]?\s*([^，,。；;]+)/),
-      company_id: pinnedId(ctx, 'company')
+      bizType: pick(text, /业务类型\s*[:：]?\s*([A-Z_]+)/),
+      company_id: pick(text, /公司\s*[:：]?\s*(\d+)/) || pinnedId(ctx, 'company')
     }
     if (!args.account_id) calls.push(call('list_accounts', {}))
     calls.push(call('draft_transaction', args))
   } else if (kind === 'account') {
     calls.push(call('draft_account', {
-      name: pick(text, /(?:账户名称?|叫)\s*[:：]?\s*([^\s，,。；;]+)/),
+      name: pick(text, /(?:账户名称|叫)\s*[:：]?\s*([^\s，,。；;]+)/),
       bankName: pick(text, /(?:开户行|银行)\s*[:：]?\s*([^\s，,。；;]+)/),
       accountNo: pick(text, /账号\s*[:：]?\s*([0-9\s-]+\d)/),
       initialBalance: pick(text, /(?:期初|余额)\s*(?:是|为|[:：])?\s*([^\s，。；;、]+)/) || amount,
       initialDate: date,
-      type: /支付宝/.test(text) ? 'ALIPAY' : /微信/.test(text) ? 'WECHAT' : /现金/.test(text) ? 'CASH' : 'BANK',
-      company_id: pinnedId(ctx, 'company')
+      type: pick(text, /类型\s*[:：]?\s*([A-Z_]+)/) || (/支付宝/.test(text) ? 'ALIPAY' : /微信/.test(text) ? 'WECHAT' : /现金/.test(text) ? 'CASH' : 'BANK'),
+      company_id: pick(text, /公司\s*[:：]?\s*(\d+)/) || pinnedId(ctx, 'company')
     }))
   }
   return calls

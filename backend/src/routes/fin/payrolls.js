@@ -31,7 +31,7 @@ async function recalcTotals(payrollId) {
 router.get('/', requirePermission('payroll.view'), wrap(async (req, res) => {
   const { page = 1, page_size = 20, company_id, period, status } = req.query
   const take = Math.min(Number(page_size) || 20, 200)
-  const where = { deletedAt: null, ...scopeWhere(req.user) }
+  const where = { deletedAt: null, AND: [scopeWhere(req.user)] } // 范围放 AND，下面的 company_id 不能覆盖它
   if (company_id) where.companyId = BigInt(company_id)
   if (period) where.period = period
   if (status) where.status = status
