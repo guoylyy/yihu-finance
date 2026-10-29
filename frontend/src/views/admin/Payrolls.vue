@@ -10,7 +10,7 @@
       </el-button>
     </div>
 
-    <div class="filter-bar">
+    <FilterBar :active="['company_id', 'period', 'status'].filter((k) => q[k]).length">
       <el-select v-model="q.company_id" placeholder="全部公司" clearable style="width: 130px" @change="load">
         <el-option v-for="c in companies" :key="c.id" :label="c.code" :value="c.id" />
       </el-select>
@@ -20,27 +20,27 @@
       <el-select v-model="q.status" placeholder="全部状态" clearable style="width: 120px" @change="load">
         <el-option v-for="s in PAYROLL_STATUS" :key="s.value" :label="s.label" :value="s.value" />
       </el-select>
-    </div>
+    </FilterBar>
 
     <div class="table-card">
-      <el-table :data="list" v-loading="loading" size="small">
+      <ResponsiveTable :data="list" v-loading="loading" size="small">
         <el-table-column prop="code" label="批次编号" width="150" />
         <el-table-column prop="company.code" label="公司" width="110" />
         <el-table-column prop="period" label="工资月份" width="100" />
-        <el-table-column prop="title" label="标题" min-width="150" />
+        <el-table-column prop="title" label="标题" min-width="150" mobile="title" />
         <el-table-column label="人数" width="70" align="right">
           <template #default="{ row }">{{ row.personCount }}</template>
         </el-table-column>
         <el-table-column label="应发合计" width="130" align="right">
           <template #default="{ row }"><span class="money">{{ money(row.grossTotal) }}</span></template>
         </el-table-column>
-        <el-table-column label="实发合计" width="130" align="right">
+        <el-table-column label="实发合计" width="130" align="right" mobile="amount">
           <template #default="{ row }"><span class="money" style="font-weight: 600">{{ money(row.netTotal) }}</span></template>
         </el-table-column>
         <el-table-column label="发薪日" width="110">
           <template #default="{ row }">{{ date(row.payDate) }}</template>
         </el-table-column>
-        <el-table-column label="状态" width="90">
+        <el-table-column label="状态" width="90" mobile="badge">
           <template #default="{ row }">
             <el-tag size="small" :type="tagOf(PAYROLL_STATUS, row.status)">{{ labelOf(PAYROLL_STATUS, row.status) }}</el-tag>
           </template>
@@ -50,9 +50,9 @@
             <el-button link type="primary" @click="$router.push(`/payrolls/${row.id}`)">明细 / 模板</el-button>
           </template>
         </el-table-column>
-      </el-table>
+      </ResponsiveTable>
       <div class="pager">
-        <el-pagination v-model:current-page="page" :page-size="20" :total="total" layout="total, prev, pager, next" @change="load" />
+        <ResponsivePager v-model:current-page="page" :page-size="20" :total="total" layout="total, prev, pager, next" @change="load" />
       </div>
     </div>
 
@@ -90,6 +90,12 @@ import { can } from '@/api/permissions'
 import { companies, loadMeta } from '@/composables/useMeta'
 import { PAYROLL_STATUS, labelOf, tagOf } from '@/constants'
 import { money, date, periodOptions, currentPeriod } from '@/utils/format'
+import ResponsiveTable from '@/components/mobile/ResponsiveTable'
+import FilterBar from '@/components/mobile/FilterBar.vue'
+import { useViewport } from '@/composables/useViewport'
+import ResponsivePager from '@/components/mobile/ResponsivePager'
+
+const { isMobile } = useViewport()
 
 const router = useRouter()
 const loading = ref(false)

@@ -217,6 +217,20 @@ onMounted(() => {
 
 .doc-foot { font-size: 12px; margin-top: 26px; padding-top: 12px; border-top: 1px solid var(--border); }
 .doc-foot code { background: #faf9f7; padding: 1px 5px; border-radius: 4px; }
+
+/* 手机：目录变成正文上方的一排胶囊（只列文档，不列小节），正文占满宽度 */
+@media (max-width: 768px) {
+  .page-head .el-input { width: 100% !important; }
+  .guide-body { flex-direction: column; gap: 12px; align-items: stretch; }
+  .toc { position: static; width: 100%; display: flex; flex-wrap: wrap; gap: 6px; padding: 8px; }
+  .toc-doc { flex: 0 0 auto; }
+  .toc-title { padding: 10px 12px; min-height: 44px; display: flex; align-items: center; border: 1px solid var(--border); }
+  .toc-sections { display: none; }
+  .doc-main { padding: 16px 14px; }
+  .sop-left, .sop-right { flex-wrap: wrap; width: 100%; }
+  .sop-right .el-progress { flex: 1; width: auto !important; }
+  .doc-foot { font-size: 13px; }
+}
 </style>
 
 <style>
@@ -257,4 +271,10 @@ onMounted(() => {
 .markdown hr { border: none; border-top: 1px solid var(--border); margin: 26px 0; }
 .markdown strong { font-weight: 600; }
 .markdown a { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
+@media (max-width: 768px) {
+  .markdown { font-size: 15px; overflow-wrap: anywhere; }
+  /* 宽表格在正文块内横向滚动，不撑破页面 */
+  .markdown table { display: block; overflow-x: auto; width: auto; max-width: 100%; }
+  .markdown li input[type=checkbox] { width: 20px; height: 20px; }
+}
 </style>

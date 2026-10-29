@@ -35,8 +35,8 @@
           </template>
         </span>
       </div>
-      <el-table :data="c.accounts" size="small">
-        <el-table-column prop="name" label="账户名称" min-width="150">
+      <ResponsiveTable :data="c.accounts" size="small">
+        <el-table-column prop="name" label="账户名称" min-width="150" mobile="title">
           <template #default="{ row }">
             {{ row.name }}
             <el-tag v-if="row.isPrimary" size="small" effect="plain" type="warning">主账户</el-tag>
@@ -49,7 +49,7 @@
           <template #default="{ row }"><span class="num">{{ row.accountNo || '—' }}</span></template>
         </el-table-column>
         <el-table-column prop="currency" label="币种" width="70" />
-        <el-table-column label="当前余额" width="150" align="right">
+        <el-table-column label="当前余额" width="150" align="right" mobile="amount">
           <template #default="{ row }"><span class="money" style="font-weight: 600">{{ money(row.balance) }}</span></template>
         </el-table-column>
         <el-table-column label="期初 / 基准日" width="170">
@@ -66,7 +66,7 @@
             <el-button v-if="can('account.manage')" link type="primary" @click="openForm(row, c)">编辑</el-button>
           </template>
         </el-table-column>
-      </el-table>
+      </ResponsiveTable>
     </div>
 
     <!-- 账户表单 -->
@@ -92,7 +92,7 @@
           </el-select>
         </el-form-item>
         <el-form-item label="期初余额">
-          <el-input-number v-model="form.initialBalance" :precision="2" :step="1000" style="width: 100%" />
+          <el-input-number v-model="form.initialBalance" :precision="2" :step="1000" style="width: 100%" inputmode="decimal" :controls="!isMobile" />
           <div class="muted" style="font-size: 12px">当前余额 = 期初余额 + 收入 − 支出，自动算出，不用手填</div>
         </el-form-item>
         <el-form-item label="期初基准日">
@@ -127,7 +127,7 @@
           </el-select>
         </el-form-item>
         <el-form-item label="金额" required>
-          <el-input-number v-model="transfer.amount" :precision="2" :min="0" :step="1000" style="width: 100%" />
+          <el-input-number v-model="transfer.amount" :precision="2" :min="0" :step="1000" style="width: 100%" inputmode="decimal" :controls="!isMobile" />
         </el-form-item>
         <el-form-item label="日期">
           <el-date-picker v-model="transfer.txnDate" type="date" value-format="YYYY-MM-DD" style="width: 100%" />
@@ -168,6 +168,10 @@ import { ACCOUNT_TYPES, ACCOUNT_TYPE_LABEL } from '@/constants'
 import { money, date } from '@/utils/format'
 import PinButton from '@/components/PinButton.vue'
 import { useDraftReceiver } from '@/stores/assistant'
+import ResponsiveTable from '@/components/mobile/ResponsiveTable'
+import { useViewport } from '@/composables/useViewport'
+
+const { isMobile } = useViewport()
 
 const summary = ref({})
 const saving = ref(false)

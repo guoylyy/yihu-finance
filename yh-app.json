@@ -1,7 +1,7 @@
 {
   "code": "finance",
   "name": "集团财务",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "icon": "💰",
   "category": "财务",
   "description": "多公司账户与流水、收付款、工资报销、发票借贷、月结、资金预测",

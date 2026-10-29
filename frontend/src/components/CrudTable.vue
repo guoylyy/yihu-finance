@@ -2,6 +2,8 @@
   通用台账页：筛选 + 列表 + 分页 + 新增/编辑弹窗 + 作废
   各模块只描述「列」和「表单字段」，业务动作用 #row-actions / #toolbar 插槽补。
   传 pin-type 时每行多一个「@」引用到录入助手；传 draft-kind 时接收助手的「填入表单」预填。
+  手机端（≤768）：表格换成卡片（列上可写 mobile: 'title'|'amount'|'badge'|'full'|'hide' 调整位置），
+  筛选收进底部 sheet，分页简化为上一页/下一页。桌面渲染不变。
 -->
 <template>
   <div class="page">
@@ -20,7 +22,11 @@
 
     <slot name="stats" :list="list" :total="total" />
 
-    <div class="filter-bar" v-if="filters.length || searchable">
+    <FilterBar v-if="filters.length || searchable" :active="activeFilters" @done="reload">
+      <template v-if="isMobile && searchable" #bar>
+        <el-input v-model="query.keyword" :placeholder="searchPlaceholder" clearable :prefix-icon="Search"
+                  enterkeyhint="search" @keyup.enter="reload" @clear="reload" />
+      </template>
       <template v-for="f in filters" :key="f.prop">
         <el-select v-if="f.type === 'select'" v-model="query[f.prop]" :placeholder="f.label" clearable
                    :style="{ width: (f.width || 140) + 'px' }" @change="reload">
@@ -32,14 +38,17 @@
         <el-input v-else v-model="query[f.prop]" :placeholder="f.label" clearable
                   :style="{ width: (f.width || 150) + 'px' }" @keyup.enter="reload" @clear="reload" />
       </template>
-      <el-input v-if="searchable" v-model="query.keyword" :placeholder="searchPlaceholder" clearable
+      <el-input v-if="searchable && !isMobile" v-model="query.keyword" :placeholder="searchPlaceholder" clearable
                 style="width: 200px" @keyup.enter="reload" @clear="reload" />
-      <el-button type="primary" @click="reload">查询</el-button>
+      <el-button v-if="!isMobile" type="primary" @click="reload">查询</el-button>
       <el-button text @click="resetFilter">重置</el-button>
-    </div>
+    </FilterBar>
 
     <div class="table-card">
-      <el-table ref="tableRef" :data="list" v-loading="loading" size="small" :row-key="(r) => r.id"
+      <MobileCards v-if="isMobile" ref="cardsRef" v-loading="loading" :data="list" :fields="mobileFields"
+                   :error="loadError" :selectable="selectable" :row-key="(r) => r.id"
+                   @selection-change="selection = $event" @retry="load" />
+      <el-table v-else ref="tableRef" :data="list" v-loading="loading" size="small" :row-key="(r) => r.id"
                 @selection-change="selection = $event">
         <el-table-column v-if="selectable" type="selection" width="40" />
         <el-table-column v-for="col in columns" :key="col.prop" :prop="col.prop" :label="col.label"
@@ -70,10 +79,16 @@
             <el-button v-if="canManage && !hideDelete" link type="danger" @click="remove(row)">作废</el-button>
           </template>
         </el-table-column>
+        <template #empty>
+          <span v-if="loadError" class="money-out">加载失败：{{ loadError }}
+            <el-button link type="primary" @click="load">重试</el-button>
+          </span>
+          <template v-else>暂无数据</template>
+        </template>
       </el-table>
 
       <div class="pager">
-        <el-pagination v-model:current-page="page" v-model:page-size="pageSize" :total="total"
+        <ResponsivePager v-model:current-page="page" v-model:page-size="pageSize" :total="total"
                        :page-sizes="[20, 50, 100]" layout="total, sizes, prev, pager, next" @change="load" />
       </div>
     </div>
@@ -87,8 +102,10 @@
           </el-select>
           <el-date-picker v-else-if="f.type === 'date'" v-model="form[f.prop]" type="date"
                           value-format="YYYY-MM-DD" style="width: 100%" />
-          <el-input-number v-else-if="f.type === 'money'" v-model="form[f.prop]" :precision="2" :step="100" style="width: 100%" />
-          <el-input-number v-else-if="f.type === 'number'" v-model="form[f.prop]" style="width: 100%" />
+          <el-input-number v-else-if="f.type === 'money'" v-model="form[f.prop]" :precision="2" :step="100" style="width: 100%"
+                           inputmode="decimal" :controls="!isMobile" />
+          <el-input-number v-else-if="f.type === 'number'" v-model="form[f.prop]" style="width: 100%"
+                           inputmode="numeric" :controls="!isMobile" />
           <el-switch v-else-if="f.type === 'switch'" v-model="form[f.prop]" />
           <el-input v-else-if="f.type === 'textarea'" v-model="form[f.prop]" type="textarea" :rows="2" />
           <el-input v-else v-model="form[f.prop]" :placeholder="f.placeholder" />
@@ -105,11 +122,16 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted, onActivated } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ref, reactive, computed, h, useSlots, onMounted, onActivated } from 'vue'
+import { ElMessage, ElMessageBox, ElButton, ElTag } from 'element-plus'
+import { Search } from '@element-plus/icons-vue'
 import { labelOf, tagOf } from '@/constants'
 import { money, date, datetime } from '@/utils/format'
 import PinButton from '@/components/PinButton.vue'
+import MobileCards from '@/components/mobile/MobileCards'
+import ResponsivePager from '@/components/mobile/ResponsivePager'
+import FilterBar from '@/components/mobile/FilterBar.vue'
+import { useViewport } from '@/composables/useViewport'
 import { useDraftReceiver } from '@/stores/assistant'
 
 const props = defineProps({
@@ -153,6 +175,10 @@ const formVisible = ref(false)
 const form = ref({})
 const selection = ref([])
 const tableRef = ref(null)
+const cardsRef = ref(null)
+const loadError = ref('')
+const slots = useSlots()
+const { isMobile } = useViewport()
 
 const get = (row, path) => path.split('.').reduce((o, k) => o?.[k], row)
 const resolve = (options, ctx) => (typeof options === 'function' ? options(ctx) : options || [])
@@ -163,8 +189,10 @@ async function load() {
     const data = await props.api.list({ ...props.extraQuery, ...query, page: page.value, page_size: pageSize.value })
     list.value = data.list
     total.value = data.total ?? data.list.length
+    loadError.value = ''
     emit('loaded', data)
   } catch (e) {
+    loadError.value = e.message
     ElMessage.error(e.message)
   } finally {
     loading.value = false
@@ -172,6 +200,50 @@ async function load() {
 }
 
 function reload() { page.value = 1; load() }
+
+// ---- 手机端卡片：列定义 → 卡片字段 ----
+const activeFilters = computed(() => props.filters.filter((f) =>
+  f.type === 'daterange' ? dateRange.value?.length : query[f.prop] !== '' && query[f.prop] != null).length)
+
+function cellOf(col, row) {
+  const slot = slots[`col-${col.prop}`]
+  if (slot) return slot({ row })
+  const v = get(row, col.prop)
+  if (col.type === 'money') return h('span', { class: ['money', col.moneyClass?.(row)] }, money(v))
+  if (col.type === 'date') return date(v)
+  if (col.type === 'datetime') return datetime(v)
+  if (col.type === 'tag') return h(ElTag, { size: 'small', type: tagOf(col.tagList, v) }, () => labelOf(col.tagList, v))
+  if (col.type === 'enum') return labelOf(col.tagList, v)
+  return col.formatter ? col.formatter(row) : (v ?? '—')
+}
+
+const mobileFields = computed(() => {
+  const cols = props.columns.filter((c) => c.mobile !== 'hide')
+  // 标题：显式指定 > 名称/标题类字段 > 第一个非金额/标签/日期列
+  const title = cols.find((c) => c.mobile === 'title')
+    || cols.find((c) => !c.mobile && /(^|\.)(name|title)$/i.test(c.prop))
+    || cols.find((c) => !c.mobile && !['money', 'tag', 'date', 'datetime'].includes(c.type)) || cols[0]
+  const amount = cols.find((c) => c.mobile === 'amount') || cols.find((c) => !c.mobile && c.type === 'money')
+  const fields = cols.map((col) => ({
+    label: col.label,
+    role: col === title ? 'title' : col === amount ? 'amount' : col.mobile || (col.type === 'tag' ? 'badge' : undefined),
+    strong: col.type === 'money',
+    render: (row) => cellOf(col, row)
+  }))
+  if (props.canManage || slots['row-actions'] || props.pinType) {
+    fields.push({
+      label: '操作',
+      role: 'actions',
+      render: (row) => [
+        props.pinType ? h(PinButton, { type: props.pinType, id: row.id, label: props.pinLabel ? props.pinLabel(row) : undefined }) : null,
+        ...(slots['row-actions']?.({ row, reload }) || []),
+        props.canManage && !props.hideEdit ? h(ElButton, { link: true, type: 'primary', onClick: () => openForm(row) }, () => '编辑') : null,
+        props.canManage && !props.hideDelete ? h(ElButton, { link: true, type: 'danger', onClick: () => remove(row) }, () => '作废') : null
+      ].filter(Boolean)
+    })
+  }
+  return fields
+})
 
 function onDateChange(v) {
   query.date_from = v?.[0] || ''
@@ -260,5 +332,5 @@ onMounted(load)
 // 列表页被 keep-alive 缓存着，从别的页面回来要重新拉一次，
 // 否则会看到别处已经改过的旧数据（比如刚登记完回款，余额还是老的）
 onActivated(load)
-defineExpose({ reload, load, openForm, openPrefill, selection, clearSelection: () => tableRef.value?.clearSelection() })
+defineExpose({ reload, load, openForm, openPrefill, selection, clearSelection: () => (isMobile.value ? cardsRef : tableRef).value?.clearSelection() })
 </script>

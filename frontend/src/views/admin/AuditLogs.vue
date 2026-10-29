@@ -7,24 +7,27 @@
       </div>
     </div>
 
-    <div class="filter-bar">
+    <FilterBar :active="(q.entity ? 1 : 0) + (q.action ? 1 : 0)" @done="reload">
+      <template v-if="isMobile" #bar>
+        <el-input v-model="q.keyword" placeholder="搜索操作人 / 摘要" clearable enterkeyhint="search" @keyup.enter="reload" @clear="reload" />
+      </template>
       <el-select v-model="q.entity" placeholder="全部对象" clearable style="width: 150px" @change="reload">
         <el-option v-for="e in ENTITIES" :key="e.value" :label="e.label" :value="e.value" />
       </el-select>
       <el-select v-model="q.action" placeholder="全部动作" clearable style="width: 130px" @change="reload">
         <el-option v-for="a in ACTIONS" :key="a.value" :label="a.label" :value="a.value" />
       </el-select>
-      <el-input v-model="q.keyword" placeholder="搜索操作人 / 摘要" clearable style="width: 200px" @keyup.enter="reload" @clear="reload" />
-      <el-button type="primary" @click="reload">查询</el-button>
-    </div>
+      <el-input v-if="!isMobile" v-model="q.keyword" placeholder="搜索操作人 / 摘要" clearable style="width: 200px" @keyup.enter="reload" @clear="reload" />
+      <el-button v-if="!isMobile" type="primary" @click="reload">查询</el-button>
+    </FilterBar>
 
     <div class="table-card">
-      <el-table :data="list" v-loading="loading" size="small">
+      <ResponsiveTable :data="list" v-loading="loading" size="small">
         <el-table-column label="时间" width="150">
           <template #default="{ row }">{{ datetime(row.createdAt) }}</template>
         </el-table-column>
         <el-table-column prop="userName" label="操作人" width="100" />
-        <el-table-column label="动作" width="100">
+        <el-table-column label="动作" width="100" mobile="badge">
           <template #default="{ row }">
             <el-tag size="small" :type="ACTION_TAG[row.action] || 'info'" effect="plain">
               {{ labelOf(ACTIONS, row.action) }}
@@ -34,11 +37,11 @@
         <el-table-column label="对象" width="120">
           <template #default="{ row }">{{ labelOf(ENTITIES, row.entity) }}</template>
         </el-table-column>
-        <el-table-column prop="summary" label="摘要" min-width="280" show-overflow-tooltip />
+        <el-table-column prop="summary" label="摘要" min-width="280" show-overflow-tooltip mobile="title" />
         <el-table-column prop="ip" label="IP" width="140" />
-      </el-table>
+      </ResponsiveTable>
       <div class="pager">
-        <el-pagination v-model:current-page="page" :page-size="30" :total="total" layout="total, prev, pager, next" @change="load" />
+        <ResponsivePager v-model:current-page="page" :page-size="30" :total="total" layout="total, prev, pager, next" @change="load" />
       </div>
     </div>
   </div>
@@ -50,6 +53,12 @@ import { ElMessage } from 'element-plus'
 import api from '@/api'
 import { labelOf } from '@/constants'
 import { datetime } from '@/utils/format'
+import ResponsiveTable from '@/components/mobile/ResponsiveTable'
+import ResponsivePager from '@/components/mobile/ResponsivePager'
+import FilterBar from '@/components/mobile/FilterBar.vue'
+import { useViewport } from '@/composables/useViewport'
+
+const { isMobile } = useViewport()
 
 const loading = ref(false)
 const list = ref([])

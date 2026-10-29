@@ -16,6 +16,9 @@
       </div>
     </div>
 
+    <el-alert v-if="isMobile" type="warning" :closable="false" show-icon class="m-desktop-tip"
+              title="建议在电脑上操作" description="月结要逐项核对并对照流水、付款明细，手机上只适合查看进度；锁月等功能照常可用。" />
+
     <div class="stat-grid">
       <div class="stat-card is-success"><div class="label">本月收入</div><div class="value">¥{{ money(data.incomeTotal) }}</div></div>
       <div class="stat-card is-danger"><div class="label">本月支出</div><div class="value">¥{{ money(data.expenseTotal) }}</div></div>
@@ -79,6 +82,9 @@ import api, { download } from '@/api'
 import { can } from '@/api/permissions'
 import { companies, loadMeta } from '@/composables/useMeta'
 import { money, datetime, periodOptions, currentPeriod } from '@/utils/format'
+import { useViewport } from '@/composables/useViewport'
+
+const { isMobile } = useViewport()
 
 const loading = ref(false)
 const companyId = ref('')
@@ -157,4 +163,12 @@ onMounted(async () => {
 .check-item .d { font-size: 12px; color: var(--text-muted); }
 .close-actions { padding-top: 14px; border-top: 1px solid var(--border); }
 .md-box :deep(textarea) { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; line-height: 1.7; }
+
+@media (max-width: 768px) {
+  .check-item .d { font-size: 13px; }
+  .close-actions { display: flex; flex-direction: column; gap: 8px; }
+  .close-actions .el-button { margin: 0 !important; width: 100%; }
+  .close-actions .el-checkbox { white-space: normal; height: auto; }
+  .md-box :deep(textarea) { font-size: 13px !important; }
+}
 </style>

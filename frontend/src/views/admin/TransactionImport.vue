@@ -8,6 +8,9 @@
       <el-button @click="$router.push('/transactions')">返回流水列表</el-button>
     </div>
 
+    <el-alert v-if="isMobile" type="warning" :closable="false" show-icon class="m-desktop-tip"
+              title="建议在电脑上操作" description="批量导入需要逐行核对、调整列映射，手机屏幕上不方便；功能照常可用。" />
+
     <el-steps :active="step" align-center finish-status="success" style="margin-bottom: 18px">
       <el-step title="选择账户与文件" />
       <el-step title="核对与分类" />
@@ -143,7 +146,7 @@
         </span>
       </div>
 
-      <div class="filter-bar">
+      <div class="filter-bar import-bar">
         <span class="muted" style="font-size: 13px">只导入此日期之后</span>
         <el-date-picker v-model="dateFrom" type="date" value-format="YYYY-MM-DD" style="width: 150px"
                         placeholder="不限" size="small" clearable />
@@ -172,22 +175,22 @@
           实际将导入 <b>{{ rowsToImport.length }}</b> 条（共解析到 {{ rows.length }} 条，
           已按日期范围与重复设置排除 {{ rows.length - rowsToImport.length }} 条）
         </div>
-        <el-table :data="visibleRows" size="small" max-height="520" @selection-change="selection = $event"
+        <ResponsiveTable :data="visibleRows" size="small" max-height="520" @selection-change="selection = $event"
                   :row-class-name="({ row }) => (row.duplicate ? 'dup-row' : row.similar ? 'similar-row' : '')">
           <el-table-column type="selection" width="40" />
           <el-table-column prop="txnDate" label="日期" width="100" />
-          <el-table-column label="收支" width="70">
+          <el-table-column label="收支" width="70" mobile="badge">
             <template #default="{ row }">
               <el-tag size="small" :type="row.direction === 'IN' ? 'success' : 'danger'" effect="plain">
                 {{ row.direction === 'IN' ? '收' : '支' }}
               </el-tag>
             </template>
           </el-table-column>
-          <el-table-column label="金额" width="120" align="right">
+          <el-table-column label="金额" width="120" align="right" mobile="amount">
             <template #default="{ row }"><span class="money">{{ money(row.amount) }}</span></template>
           </el-table-column>
-          <el-table-column prop="counterparty" label="对方名称" min-width="150" />
-          <el-table-column prop="summary" label="摘要 / 用途" min-width="180" />
+          <el-table-column prop="counterparty" label="对方名称" min-width="150" mobile="title" />
+          <el-table-column prop="summary" label="摘要 / 用途" min-width="180" mobile="full" />
           <el-table-column label="业务类型" width="150">
             <template #default="{ row }">
               <el-select v-model="row.bizType" size="small">
@@ -195,7 +198,7 @@
               </el-select>
             </template>
           </el-table-column>
-          <el-table-column label="核对" min-width="230">
+          <el-table-column label="核对" min-width="230" mobile="full">
             <template #default="{ row }">
               <el-tag v-if="row.duplicate" size="small" type="danger">已导过 {{ row.duplicateOf }}</el-tag>
               <el-tag v-else-if="row.similar" size="small" type="warning" effect="plain">
@@ -207,7 +210,7 @@
               <span v-else class="muted">—</span>
             </template>
           </el-table-column>
-        </el-table>
+        </ResponsiveTable>
       </div>
     </div>
 
@@ -234,6 +237,10 @@ import api from '@/api'
 import { companies, accounts, accountsOf, loadMeta } from '@/composables/useMeta'
 import { BIZ_TYPES } from '@/constants'
 import { money } from '@/utils/format'
+import ResponsiveTable from '@/components/mobile/ResponsiveTable'
+import { useViewport } from '@/composables/useViewport'
+
+const { isMobile } = useViewport()
 
 const step = ref(0)
 const loading = ref(false)
@@ -389,4 +396,14 @@ table.sample th { background: #faf9f7; color: var(--text-muted); font-weight: 60
 table.sample .used { background: #fdf5f1; }
 table.sample th.used { color: var(--accent); }
 table.sample .role { margin-left: 5px; color: var(--accent); font-weight: 700; }
+
+@media (max-width: 768px) {
+  .map-grid { grid-template-columns: 1fr 1fr; }
+  .map-item label { font-size: 13px; }
+  /* 日期范围 / 跳过重复 / 批量改类型：每项整行；上一步、确认导入并排放最后 */
+  .import-bar .el-date-editor, .import-bar .el-select { flex: 1 1 40%; width: auto !important; }
+  .import-bar .el-divider, .import-bar > div[style] { display: none; }
+  .import-bar > .el-button:nth-last-child(-n + 2) { flex: 1 1 40%; margin: 0; }
+  :deep(.el-steps .el-step__title) { font-size: 13px; line-height: 1.4; }
+}
 </style>

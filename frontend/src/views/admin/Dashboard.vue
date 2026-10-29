@@ -70,8 +70,8 @@
       <el-col :xs="24" :lg="10">
         <div class="section-title">未来资金预测</div>
         <div class="chart-card">
-          <el-table :data="data.forecast?.windows || []" size="small">
-            <el-table-column prop="days" label="窗口" width="80">
+          <ResponsiveTable :data="data.forecast?.windows || []" size="small">
+            <el-table-column prop="days" label="窗口" width="80" mobile="title">
               <template #default="{ row }">未来 {{ row.days }} 天</template>
             </el-table-column>
             <el-table-column label="预计流入" align="right">
@@ -80,12 +80,12 @@
             <el-table-column label="预计流出" align="right">
               <template #default="{ row }"><span class="money money-out">{{ money(row.outflow) }}</span></template>
             </el-table-column>
-            <el-table-column label="预计期末" align="right">
+            <el-table-column label="预计期末" align="right" mobile="amount">
               <template #default="{ row }">
                 <span class="money" :class="row.endingBalance < 0 ? 'money-out' : ''">{{ money(row.endingBalance) }}</span>
               </template>
             </el-table-column>
-          </el-table>
+          </ResponsiveTable>
           <div class="forecast-note">
             当前可用余额 <b class="money">¥{{ money(data.forecast?.available) }}</b>，
             预测口径 = 可用余额 + 预计收款 − 已审批待付款 − 固定周期支出。
@@ -101,9 +101,10 @@
 import { ref, onMounted, nextTick, onActivated } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import * as echarts from 'echarts'
+import { useCharts } from '@/composables/useCharts'
 import api from '@/api'
 import { money, currentPeriod, periodOptions } from '@/utils/format'
+import ResponsiveTable from '@/components/mobile/ResponsiveTable'
 
 const router = useRouter()
 const loading = ref(false)
@@ -112,7 +113,7 @@ const period = ref(currentPeriod())
 const periods = periodOptions(18)
 const now = new Date().toLocaleDateString('zh-CN')
 const trendRef = ref(null)
-let chart = null
+const { render: renderChart, resizeAll } = useCharts()
 
 async function load() {
   loading.value = true
@@ -129,9 +130,8 @@ async function load() {
 
 function renderTrend() {
   if (!trendRef.value) return
-  chart = chart || echarts.init(trendRef.value)
   const list = data.value.trend || []
-  chart.setOption({
+  renderChart(trendRef.value, {
     grid: { left: 58, right: 16, top: 30, bottom: 28 },
     tooltip: { trigger: 'axis', valueFormatter: (v) => '¥' + money(v) },
     legend: { data: ['收入', '支出', '净现金流'], right: 0, top: 0, icon: 'roundRect', itemWidth: 10, itemHeight: 10 },
@@ -153,8 +153,7 @@ function goCompany(c) {
 }
 
 onMounted(load)
-onActivated(() => { load(); chart?.resize() })
-window.addEventListener('resize', () => chart?.resize())
+onActivated(() => { load(); resizeAll() })
 </script>
 
 <style scoped>
@@ -168,6 +167,13 @@ window.addEventListener('resize', () => chart?.resize())
   transition: border-color 0.15s, transform 0.15s;
 }
 .company-card:hover { border-color: var(--accent); transform: translateY(-1px); }
+@media (max-width: 768px) {
+  .company-grid { grid-template-columns: 1fr; gap: 8px; }
+  .company-card { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; padding: 12px 14px; }
+  .c-balance { font-size: 18px; margin-top: 0; }
+  .c-extra { flex-basis: 100%; font-size: 13px; }
+  .forecast-note { font-size: 13px; }
+}
 .c-name { font-size: 14px; font-weight: 600; }
 .c-balance { font-size: 22px; font-weight: 600; margin-top: 4px; }
 .c-extra { font-size: 12px; color: var(--text-muted); }
@@ -177,4 +183,7 @@ window.addEventListener('resize', () => chart?.resize())
 }
 .chart { height: 300px; }
 .forecast-note { font-size: 12px; color: var(--text-muted); margin-top: 10px; line-height: 1.7; }
+@media (max-width: 768px) {
+  .chart { height: 240px; }
+}
 </style>

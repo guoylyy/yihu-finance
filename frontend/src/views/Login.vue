@@ -17,11 +17,13 @@
 
       <el-form v-else :model="form" @submit.prevent="submit">
         <el-form-item>
-          <el-input v-model="form.username" size="large" placeholder="用户名" :prefix-icon="User" />
+          <el-input v-model="form.username" size="large" placeholder="用户名" :prefix-icon="User"
+                    autocomplete="username" autocapitalize="off" enterkeyhint="next" />
         </el-form-item>
         <el-form-item>
           <el-input v-model="form.password" size="large" type="password" show-password
-                    placeholder="密码" :prefix-icon="Lock" @keyup.enter="submit" />
+                    placeholder="密码" :prefix-icon="Lock" autocomplete="current-password" enterkeyhint="go"
+                    @keyup.enter="submit" />
         </el-form-item>
         <el-checkbox v-model="form.remember" label="30 天内免登录" style="margin-bottom: 14px" />
         <el-button type="primary" size="large" style="width: 100%" :loading="loading" @click="submit">
@@ -106,5 +108,19 @@ async function submit() {
 .hint {
   margin-top: 18px; font-size: 12px; color: var(--text-muted);
   text-align: center; line-height: 1.7;
+}
+
+/* 375px：不缩放即可登录；输入框 16px 防 iOS 聚焦放大（mobile.css 全局已设），按钮 48px */
+@media (max-width: 768px) {
+  .login-page {
+    align-items: flex-start; padding: 16px;
+    padding-top: calc(12vh + env(safe-area-inset-top)); padding-bottom: calc(16px + env(safe-area-inset-bottom));
+    min-height: 100dvh;
+  }
+  .login-card { padding: 26px 20px 20px; }
+  .brand-sub { font-size: 13px; }
+  .login-card :deep(.el-button--large) { height: 48px; font-size: 16px; }
+  .login-card :deep(.el-checkbox__label) { font-size: 14px; }
+  .hint { font-size: 13px; word-break: break-all; }
 }
 </style>

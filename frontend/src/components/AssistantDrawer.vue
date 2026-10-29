@@ -1,9 +1,15 @@
 <!-- 右侧录入助手：上下文（当前页面 + @ 引用）、对话、草稿卡。助手只生成草稿，写入由用户确认 -->
 <template>
-  <aside class="assistant-pane" :style="{ width: store.width + 'px' }">
-    <div class="resizer" title="拖动调整宽度" @mousedown.prevent="startResize" />
+  <aside class="assistant-pane" :class="{ 'is-sheet': isMobile, 'is-overlay': isTablet }"
+         :style="isMobile ? sheetStyle : { width: store.width + 'px' }">
+    <div v-if="!isMobile" class="resizer" title="拖动调整宽度" @mousedown.prevent="startResize" />
 
-    <div class="a-head">
+    <!-- 手机端：拖拽把手，下拉超过 100px 收起 -->
+    <div v-if="isMobile" class="a-handle" @touchstart.passive="dragStart" @touchmove.passive="dragMove" @touchend="dragEnd">
+      <span />
+    </div>
+    <div class="a-head" @touchstart.passive="isMobile && dragStart($event)" @touchmove.passive="isMobile && dragMove($event)"
+         @touchend="isMobile && dragEnd()">
       <div class="a-title">
         录入助手
         <el-tag v-if="store.status.stub" size="small" type="info" effect="plain">STUB</el-tag>
@@ -13,7 +19,7 @@
           <el-icon><Delete /></el-icon>
         </el-button>
       </el-tooltip>
-      <el-button text circle size="small" @click="store.open = false"><el-icon><Close /></el-icon></el-button>
+      <el-button text circle size="small" aria-label="关闭录入助手" @click="store.open = false"><el-icon><Close /></el-icon></el-button>
     </div>
     <div class="a-hint">助手只生成草稿，提交前请核对</div>
 
@@ -58,12 +64,26 @@ import { useRoute } from 'vue-router'
 import api from '@/api'
 import AssistantDraftCard from '@/components/AssistantDraftCard.vue'
 import { useAssistantStore, DRAFT_PAGES, MIN_WIDTH, MAX_WIDTH } from '@/stores/assistant'
+import { useViewport } from '@/composables/useViewport'
 
 const store = useAssistantStore()
 const route = useRoute()
 const input = ref('')
 const sending = ref(false)
 const listRef = ref(null)
+const { isMobile, isTablet } = useViewport()
+
+// 手机端下拉把手关闭
+const dragY = ref(0)
+let dragFrom = null
+const sheetStyle = computed(() => (dragY.value ? { transform: `translateY(${dragY.value}px)`, transition: 'none' } : {}))
+function dragStart(e) { dragFrom = e.touches[0].clientY }
+function dragMove(e) { if (dragFrom != null) dragY.value = Math.max(0, e.touches[0].clientY - dragFrom) }
+function dragEnd() {
+  if (dragY.value > 100) store.open = false
+  dragY.value = 0
+  dragFrom = null
+}
 
 const TYPE_LABEL = { company: '公司', customer: '客户', project: '项目', account: '账户', receivable: '应收', invoice: '发票', transaction: '流水' }
 const EXAMPLES = {
@@ -149,4 +169,33 @@ onBeforeUnmount(() => stopResize?.())
 .msg.assistant .bubble { background: #f4f2ef; }
 .msg-warn { font-size: 12px; color: var(--warning); margin-top: 4px; line-height: 1.6; }
 .a-input { border-top: 1px solid var(--border); padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; align-items: flex-end; }
+
+/* 平板：浮在内容右侧，不挤占主区域 */
+.assistant-pane.is-overlay {
+  position: fixed; top: 0; right: 0; bottom: 0; z-index: 1500; max-width: 100vw;
+  box-shadow: -8px 0 24px rgba(28, 25, 23, 0.12);
+}
+/* 手机：全屏 sheet，盖住内容但让出顶部安全区；弹窗 / 确认框（z-index ≥2000）仍在它上面 */
+.assistant-pane.is-sheet {
+  position: fixed; left: 0; right: 0; bottom: 0; top: env(safe-area-inset-top); z-index: 1500;
+  width: 100%; height: auto; border-left: none; border-radius: 14px 14px 0 0;
+  box-shadow: 0 -6px 24px rgba(28, 25, 23, 0.14); transition: transform 0.2s;
+}
+.is-sheet .a-handle { display: flex; justify-content: center; padding: 8px 0 2px; flex-shrink: 0; touch-action: none; }
+.is-sheet .a-handle span { width: 40px; height: 4px; border-radius: 2px; background: var(--border-strong); }
+.is-sheet .a-head { height: 48px; padding: 0 4px 0 16px; }
+.is-sheet .a-head .el-button { width: 44px; height: 44px; }
+.is-sheet .a-title { font-size: 16px; }
+.is-sheet .a-hint { font-size: 13px; }
+.is-sheet .a-context .el-tag { height: 32px; font-size: 13px; }
+.is-sheet .a-messages { overscroll-behavior: contain; }
+.is-sheet .bubble { font-size: 15px; max-width: 88%; }
+.is-sheet .a-empty { font-size: 14px; }
+.is-sheet .a-empty .eg { padding: 8px 0; }
+.is-sheet .a-input {
+  flex-direction: row; align-items: flex-end;
+  padding: 8px 12px calc(8px + env(safe-area-inset-bottom));
+}
+.is-sheet .a-input .el-textarea { flex: 1; }
+.is-sheet .a-input .el-button { min-width: 64px; }
 </style>

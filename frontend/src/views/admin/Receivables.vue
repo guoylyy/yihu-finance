@@ -87,7 +87,7 @@
         </el-select>
       </el-form-item>
       <el-form-item label="本次收款" required>
-        <el-input-number v-model="receipt.amount" :precision="2" :min="0" :step="1000" style="width: 100%" />
+        <el-input-number v-model="receipt.amount" :precision="2" :min="0" :step="1000" style="width: 100%" inputmode="decimal" :controls="!isMobile" />
       </el-form-item>
       <el-form-item label="收款日期">
         <el-date-picker v-model="receipt.receiptDate" type="date" value-format="YYYY-MM-DD" style="width: 100%" />
@@ -111,6 +111,9 @@ import { can } from '@/api/permissions'
 import { companies, accountsOf, loadMeta } from '@/composables/useMeta'
 import { RECEIVABLE_STATUS, CONFIDENCE } from '@/constants'
 import { money } from '@/utils/format'
+import { useViewport } from '@/composables/useViewport'
+
+const { isMobile } = useViewport()
 
 const tableRef = ref(null)
 const today = new Date().toISOString().slice(0, 10)

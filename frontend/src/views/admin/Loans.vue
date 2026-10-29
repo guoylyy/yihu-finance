@@ -44,7 +44,7 @@
               :title="`${current.counterpartyName}｜本金 ¥${money(current.principal)}｜已还 ¥${money(current.repaidAmount)}`" />
     <el-form :model="repay" label-width="110px">
       <el-form-item label="还款金额" required>
-        <el-input-number v-model="repay.amount" :precision="2" :min="0" style="width: 100%" />
+        <el-input-number v-model="repay.amount" :precision="2" :min="0" style="width: 100%" inputmode="decimal" :controls="!isMobile" />
       </el-form-item>
       <el-form-item label="还款日期">
         <el-date-picker v-model="repay.repayDate" type="date" value-format="YYYY-MM-DD" style="width: 100%" />
@@ -75,6 +75,9 @@ import { can } from '@/api/permissions'
 import { companies, persons, accountsOf, loadMeta, loadPersons } from '@/composables/useMeta'
 import { LOAN_DIRECTIONS, LOAN_STATUS } from '@/constants'
 import { money } from '@/utils/format'
+import { useViewport } from '@/composables/useViewport'
+
+const { isMobile } = useViewport()
 
 const tableRef = ref(null)
 const summary = ref({})

@@ -157,4 +157,23 @@ async function submit() {
 .fields tr.missing { background: #fdf0ee; }
 .warns { font-size: 12px; color: var(--warning); padding: 6px 10px; border-top: 1px dashed var(--border); line-height: 1.6; }
 .draft-actions { display: flex; justify-content: flex-end; gap: 6px; padding: 8px 10px; border-top: 1px solid var(--border); }
+
+/* 手机：字段单列（标签在上、值在下），提交按钮钉在消息区可视范围底部（sticky），不随键盘被顶走 */
+@media (max-width: 768px) {
+  .draft { overflow: visible; }
+  .kind { font-size: 14px; }
+  .fields, .fields tbody, .fields tr, .fields th, .fields td { display: block; width: auto; }
+  .fields { font-size: 14px; }
+  .fields tr { padding: 6px 12px; border-bottom: 1px solid var(--border); }
+  .fields tr:last-child { border-bottom: none; }
+  .fields th { padding: 0 0 2px; font-size: 13px; }
+  .fields td { padding: 0; }
+  .warns { font-size: 13px; }
+  .draft-actions {
+    position: sticky; bottom: 0; z-index: 1; background: #fff;
+    padding: 8px 10px; border-radius: 0 0 8px 8px;
+  }
+  .draft-actions > * { flex: 1; }
+  .draft-actions .el-button { width: 100%; min-height: 44px; margin: 0; }
+}
 </style>

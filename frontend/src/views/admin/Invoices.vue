@@ -46,8 +46,8 @@
   <el-dialog v-model="dupVisible" title="重复发票号" width="720px">
     <el-alert type="warning" :closable="false" style="margin-bottom: 12px"
               title="同一公司下发票号重复，通常是重复录入或重复报销，请核实后作废其中一条" />
-    <el-table :data="dupList" size="small">
-      <el-table-column prop="invoiceNo" label="发票号码" width="180" />
+    <ResponsiveTable :data="dupList" size="small">
+      <el-table-column prop="invoiceNo" label="发票号码" width="180" mobile="title" />
       <el-table-column prop="company.code" label="公司" width="110" />
       <el-table-column label="类型" width="100">
         <template #default="{ row }">{{ labelOf(INVOICE_TYPES, row.type) }}</template>
@@ -55,11 +55,11 @@
       <el-table-column label="开票日期" width="110">
         <template #default="{ row }">{{ date(row.issueDate) }}</template>
       </el-table-column>
-      <el-table-column label="价税合计" align="right" width="120">
+      <el-table-column label="价税合计" align="right" width="120" mobile="amount">
         <template #default="{ row }"><span class="money">{{ money(row.totalAmount) }}</span></template>
       </el-table-column>
       <el-table-column prop="sellerName" label="开票方" min-width="150" />
-    </el-table>
+    </ResponsiveTable>
   </el-dialog>
 </template>
 
@@ -72,6 +72,7 @@ import { can } from '@/api/permissions'
 import { companies, loadMeta } from '@/composables/useMeta'
 import { INVOICE_TYPES, INVOICE_STATUS, labelOf } from '@/constants'
 import { money, date } from '@/utils/format'
+import ResponsiveTable from '@/components/mobile/ResponsiveTable'
 
 const tableRef = ref(null)
 const stats = ref({})

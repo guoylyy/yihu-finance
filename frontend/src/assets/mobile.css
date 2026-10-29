@@ -1,0 +1,203 @@
+/* ============================================================
+   移动端与自适应：断点与 composables/useViewport.js 一致
+   手机 ≤768 · 平板 769–1024 · 桌面 >1024
+   这里的规则全部包在 @media 里，桌面（>1024）不受任何影响
+   ============================================================ */
+
+/* ---------- 卡片列表 / 简化分页 / 筛选 sheet：这些类只在手机端出现，不必包 @media ---------- */
+.m-cards { display: flex; flex-direction: column; gap: 10px; min-height: 60px; }
+.m-cards-bar {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 4px; font-size: 14px;
+}
+.m-card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--card-radius); padding: 12px 14px; font-size: 14px;
+}
+.m-card.is-selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+.m-card.dup-row { background: #fdf0ee; }
+.m-card.similar-row { background: #fdf7ec; }
+.m-card-head { display: flex; align-items: flex-start; gap: 10px; }
+.m-check { flex-shrink: 0; display: flex; align-items: center; min-height: 24px; }
+.m-card-main { flex: 1; min-width: 0; }
+.m-card-title { font-weight: 600; font-size: 15px; line-height: 1.45; word-break: break-all; }
+.m-card-badges { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+.m-card-amount {
+  flex-shrink: 0; text-align: right; font-weight: 700; font-size: 16px; line-height: 1.35;
+  font-family: var(--font-num); font-variant-numeric: tabular-nums; max-width: 55%; word-break: break-all;
+}
+.m-card-amount .m-label { font-family: var(--font-cn); font-size: 12px; font-weight: 400; }
+.m-card-body {
+  display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 5px 14px;
+  margin-top: 10px; line-height: 1.5;
+}
+.m-field { display: contents; }
+.m-label { color: var(--text-muted); white-space: nowrap; }
+.m-value { text-align: right; min-width: 0; word-break: break-all; }
+.m-value.is-strong { font-weight: 600; }
+.m-field.is-full .m-value { grid-column: 1 / -1; text-align: left; margin-top: -2px; }
+.m-card-actions {
+  display: flex; flex-wrap: wrap; gap: 8px;
+  margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--border);
+}
+.m-card-actions > * { flex: 1 1 auto; }
+.m-card-actions > span, .m-card-actions > div { display: flex; }
+.m-card-actions .el-button {
+  flex: 1 1 auto; min-height: 44px; min-width: 44px; margin: 0 !important;
+  padding: 0 12px; border: 1px solid var(--border); border-radius: 8px; font-size: 14px;
+}
+.m-card-actions > span > .el-button, .m-card-actions > div > .el-button { width: 100%; }
+.m-state {
+  padding: 36px 12px; text-align: center; color: var(--text-muted); font-size: 14px;
+  background: var(--surface); border: 1px dashed var(--border-strong); border-radius: var(--card-radius);
+}
+.m-state-error { color: var(--danger); display: flex; flex-direction: column; align-items: center; gap: 10px; }
+
+.m-pager {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 12px 0 4px; width: 100%;
+}
+.m-pager .el-button { min-height: 44px; margin: 0; }
+.m-pager-info { font-size: 14px; text-align: center; }
+
+.m-filter-row { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; }
+.m-filter-bar-slot { flex: 1; min-width: 0; display: flex; }
+.m-filter-bar-slot > * { flex: 1; width: 100% !important; }
+.m-filter-bar-slot:empty { display: none; }
+.m-filter-badge .el-badge__content { z-index: 1; }
+.m-filter-btn { min-height: 44px; }
+.m-filter-btn .el-icon { margin-right: 4px; }
+
+.el-drawer.m-sheet {
+  height: auto !important; max-height: 85vh; max-height: 85dvh;
+  border-radius: 14px 14px 0 0;
+}
+.el-drawer.m-sheet .el-drawer__body { padding: 0; display: flex; flex-direction: column; min-height: 0; }
+.m-sheet-handle { width: 40px; height: 4px; border-radius: 2px; background: var(--border-strong); margin: 8px auto 0; flex-shrink: 0; }
+.m-sheet-title {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 4px 8px 4px 16px; font-weight: 600; font-size: 16px; flex-shrink: 0;
+}
+.m-sheet-title .el-button { width: 44px; height: 44px; }
+.m-sheet-body {
+  flex: 1; overflow-y: auto; padding: 4px 16px 12px;
+  display: flex; flex-direction: column; gap: 12px;
+}
+/* sheet 里的筛选控件一律整行，覆盖桌面写死的 style="width: 140px" */
+.m-sheet-body > *, .m-sheet-body .el-select, .m-sheet-body .el-input,
+.m-sheet-body .el-date-editor { width: 100% !important; margin: 0 !important; }
+.m-sheet-body .el-button { min-height: 44px; }
+.m-sheet-body .el-checkbox, .m-sheet-body .el-switch { width: auto !important; }
+.m-sheet-foot {
+  display: flex; gap: 8px; flex-shrink: 0; border-top: 1px solid var(--border);
+  padding: 10px 16px calc(10px + env(safe-area-inset-bottom));
+}
+.m-sheet-foot .el-button { flex: 1; min-height: 44px; margin: 0; }
+
+/* 「建议在电脑上操作」提示条 */
+.m-desktop-tip { margin-bottom: 12px; }
+
+/* ---------- 手机（≤768） ---------- */
+@media (max-width: 768px) {
+  /* 触控尺寸：Element 组件默认高度统一到 44px，正文 14px */
+  :root {
+    --el-component-size: 44px;
+    --el-component-size-small: 44px;
+    --el-component-size-large: 48px;
+  }
+  body { font-size: 14px; }
+  .el-button { min-height: 44px; }
+  .el-button.is-circle { width: 44px; height: 44px; }
+  .el-button + .el-button { margin-left: 8px; }
+  .el-checkbox, .el-radio { min-height: 44px; }
+  .el-switch { min-height: 44px; }
+  .el-tabs__item { height: 44px; font-size: 14px; }
+  .el-dropdown-menu__item { min-height: 44px; font-size: 15px; }
+  .el-select-dropdown__item { height: 44px; line-height: 44px; font-size: 15px; }
+  .el-message-box { max-width: calc(100vw - 32px); }
+  .el-message { max-width: calc(100vw - 24px); min-width: 0; }
+
+  /* iOS 输入框字号 <16px 会在聚焦时自动放大页面 */
+  .el-input__inner, .el-textarea__inner, .el-select__selected-item, .el-select__input,
+  .el-select__placeholder, .el-range-input, .el-input-number .el-input__inner { font-size: 16px !important; }
+
+  /* 页面骨架 */
+  .page { padding: 0 0 16px; }
+  .page-head { flex-direction: column; align-items: stretch; gap: 10px; margin-bottom: 12px; }
+  /* 右侧工具区（包在 div 里的一组按钮/下拉）换行排；直接放在 page-head 下的单个组件整行 */
+  .page-head > div:not(:first-child):not([class*="el-"]) { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .page-head > div:not(:first-child):not([class*="el-"]) > * { margin: 0 !important; }
+  .page-head > div:not(:first-child):not([class*="el-"]) > .el-select { flex: 1 1 120px; }
+  .page-head > .el-select, .page-head > .el-input { width: 100% !important; }
+  .page-head > .el-button { align-self: flex-start; margin: 0; }
+  .page-title { font-size: 18px; }
+  .page-sub { font-size: 13px; line-height: 1.6; }
+
+  /* 统计卡单列堆叠：标签左、数值右，省高度 */
+  .stat-grid { grid-template-columns: 1fr; gap: 8px; margin-bottom: 12px; }
+  .stat-card {
+    padding: 10px 14px; display: flex; flex-wrap: wrap; align-items: baseline;
+    justify-content: space-between; column-gap: 12px;
+  }
+  .stat-card .label { font-size: 14px; }
+  .stat-card .value { font-size: 20px; margin-top: 0; text-align: right; word-break: break-all; min-width: 0; }
+  .stat-card .foot { font-size: 13px; flex-basis: 100%; margin-top: 2px; }
+
+  .filter-bar { padding: 10px; gap: 8px; }
+  /* 表格容器在卡片形态下去掉外框，卡片自己有边框 */
+  .table-card:has(> .m-cards), .chart-card:has(> .m-cards) { background: transparent; border: none; padding: 0 !important; }
+  .chart-card { padding: 10px; }
+  .section-title { font-size: 15px; margin: 16px 0 8px; }
+
+  /* 弹窗：全屏，表单单列标签在上，按钮区固定底部（不被键盘顶出：主体滚动，底栏不动） */
+  .el-overlay-dialog { overflow: hidden; }
+  .el-dialog {
+    --el-dialog-width: 100% !important;
+    width: 100% !important; max-width: 100%; margin: 0 !important;
+    height: 100%; height: 100dvh; border-radius: 0;
+    display: flex; flex-direction: column; padding: 0;
+  }
+  .el-dialog__header {
+    flex-shrink: 0; padding: calc(12px + env(safe-area-inset-top)) 56px 12px 16px;
+    border-bottom: 1px solid var(--border); margin: 0;
+  }
+  .el-dialog__title { font-size: 16px; font-weight: 600; }
+  .el-dialog__headerbtn { width: 52px; height: 52px; top: env(safe-area-inset-top); right: 0; }
+  .el-dialog__body { flex: 1; min-height: 0; overflow-y: auto; padding: 16px; -webkit-overflow-scrolling: touch; }
+  .el-dialog__footer {
+    flex-shrink: 0; display: flex; gap: 8px; margin: 0;
+    padding: 10px 16px calc(10px + env(safe-area-inset-bottom));
+    border-top: 1px solid var(--border); background: var(--surface);
+  }
+  .el-dialog__footer > span, .el-dialog__footer > div { display: flex; gap: 8px; width: 100%; }
+  .el-dialog__footer .el-button { flex: 1; margin: 0 !important; }
+
+  .el-form:not(.el-form--inline) .el-form-item { display: block; margin-bottom: 14px; }
+  .el-form:not(.el-form--inline) .el-form-item__label-wrap { margin: 0 !important; }
+  .el-form:not(.el-form--inline) .el-form-item__label {
+    width: auto !important; justify-content: flex-start; text-align: left;
+    height: auto; line-height: 1.5; padding: 0 0 6px; font-size: 14px;
+  }
+  .el-form:not(.el-form--inline) .el-form-item__content { margin-left: 0 !important; width: 100%; }
+  .el-form .el-input-number { width: 100% !important; }
+
+  /* 抽屉（详情面板类）：全宽；导航抽屉自己定宽 */
+  .el-drawer.rtl:not(.m-nav-drawer), .el-drawer.ltr:not(.m-nav-drawer) { width: 100% !important; }
+  .el-drawer__header { margin-bottom: 0; padding: calc(12px + env(safe-area-inset-top)) 12px 12px 16px; }
+  .el-drawer__close-btn { width: 44px; height: 44px; }
+  .el-drawer__body { padding: 12px; }
+  .el-drawer__footer { padding-bottom: calc(10px + env(safe-area-inset-bottom)); }
+
+  /* 日期范围面板：两个月份上下排，不超出屏幕 */
+  .el-picker-panel.el-date-range-picker { width: calc(100vw - 16px) !important; }
+  .el-date-range-picker .el-picker-panel__body { min-width: 0 !important; }
+  .el-date-range-picker__content { float: none !important; width: 100% !important; }
+  .el-date-range-picker__content.is-left { border-right: none !important; }
+  .el-date-range-picker.has-sidebar .el-picker-panel__body { margin-left: 0 !important; }
+  .el-picker-panel__sidebar { display: none; }
+  .el-picker-panel.el-date-picker { width: calc(100vw - 16px) !important; max-width: 340px; }
+  .el-picker-panel.el-date-picker .el-picker-panel__content { width: auto !important; }
+
+  .el-alert__title { font-size: 14px; }
+  .el-alert__description { font-size: 13px; }
+}

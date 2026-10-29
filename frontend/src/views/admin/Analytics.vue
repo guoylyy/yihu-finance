@@ -35,21 +35,21 @@
       <el-col :xs="24" :lg="12">
         <div class="section-title">支出分类排名</div>
         <div class="chart-card">
-          <el-table :data="categoryList" size="small" max-height="320">
-            <el-table-column label="分类" min-width="140">
+          <ResponsiveTable :data="categoryList" size="small" max-height="320">
+            <el-table-column label="分类" min-width="140" mobile="title">
               <template #default="{ row }">{{ row.categoryName || BIZ_LABEL[row.bizType] || row.bizType }}</template>
             </el-table-column>
             <el-table-column prop="count" label="笔数" width="70" align="right" />
-            <el-table-column label="金额" width="130" align="right">
+            <el-table-column label="金额" width="130" align="right" mobile="amount">
               <template #default="{ row }"><span class="money">{{ money(row.total) }}</span></template>
             </el-table-column>
-            <el-table-column label="占比" width="120">
+            <el-table-column label="占比" width="120" mobile="full">
               <template #default="{ row }">
                 <el-progress :percentage="pct(row.total)" :stroke-width="8" :show-text="false" color="#d2521e" />
                 <span class="muted" style="font-size: 12px">{{ pct(row.total) }}%</span>
               </template>
             </el-table-column>
-          </el-table>
+          </ResponsiveTable>
         </div>
       </el-col>
     </el-row>
@@ -58,20 +58,20 @@
       <el-col :xs="24" :lg="12">
         <div class="section-title">支出对手方 TOP 15</div>
         <div class="chart-card">
-          <el-table :data="topList" size="small" max-height="360">
+          <ResponsiveTable :data="topList" size="small" max-height="360">
             <el-table-column type="index" width="50" />
             <el-table-column prop="name" label="收款方" min-width="180" show-overflow-tooltip />
             <el-table-column prop="count" label="笔数" width="70" align="right" />
-            <el-table-column label="金额合计" width="130" align="right">
+            <el-table-column label="金额合计" width="130" align="right" mobile="amount">
               <template #default="{ row }"><span class="money">{{ money(row.total) }}</span></template>
             </el-table-column>
-          </el-table>
+          </ResponsiveTable>
         </div>
       </el-col>
       <el-col :xs="24" :lg="12">
         <div class="section-title">项目收支</div>
         <div class="chart-card">
-          <el-table :data="projectList" size="small" max-height="360">
+          <ResponsiveTable :data="projectList" size="small" max-height="360">
             <el-table-column prop="name" label="项目" min-width="160" />
             <el-table-column label="收入" width="120" align="right">
               <template #default="{ row }"><span class="money money-in">{{ money(row.income) }}</span></template>
@@ -79,13 +79,13 @@
             <el-table-column label="支出" width="120" align="right">
               <template #default="{ row }"><span class="money money-out">{{ money(row.expense) }}</span></template>
             </el-table-column>
-            <el-table-column label="净额" width="120" align="right">
+            <el-table-column label="净额" width="120" align="right" mobile="amount">
               <template #default="{ row }">
                 <span class="money" :class="row.net >= 0 ? 'money-in' : 'money-out'">{{ money(row.net) }}</span>
               </template>
             </el-table-column>
-          </el-table>
-          <el-empty v-if="!projectList.length" description="还没有给流水打项目标签" :image-size="60" />
+          </ResponsiveTable>
+          <el-empty v-if="!projectList.length && !isMobile" description="还没有给流水打项目标签" :image-size="60" />
         </div>
       </el-col>
     </el-row>
@@ -95,11 +95,15 @@
 <script setup>
 import { ref, onMounted, nextTick, onActivated } from 'vue'
 import { ElMessage } from 'element-plus'
-import * as echarts from 'echarts'
+import { useCharts } from '@/composables/useCharts'
 import api from '@/api'
 import { companies, loadMeta } from '@/composables/useMeta'
 import { BIZ_LABEL } from '@/constants'
 import { money } from '@/utils/format'
+import ResponsiveTable from '@/components/mobile/ResponsiveTable'
+import { useViewport } from '@/composables/useViewport'
+
+const { isMobile } = useViewport()
 
 const loading = ref(false)
 const companyId = ref('')
@@ -110,15 +114,14 @@ const projectList = ref([])
 const trendRef = ref(null)
 const companyRef = ref(null)
 const laborRef = ref(null)
-const charts = {}
+const { render, resizeAll } = useCharts()
 
 const categoryTotal = () => categoryList.value.reduce((s, r) => s + r.total, 0)
 const pct = (v) => (categoryTotal() ? Math.round((v / categoryTotal()) * 100) : 0)
 
 function chart(refEl, key, option) {
   if (!refEl.value) return
-  charts[key] = charts[key] || echarts.init(refEl.value)
-  charts[key].setOption(option, true)
+  render(refEl.value, option, true)
 }
 
 async function load() {
@@ -186,8 +189,7 @@ async function load() {
 }
 
 onMounted(async () => { await loadMeta(); load() })
-onActivated(() => { load(); Object.values(charts).forEach((c) => c.resize()) })
-window.addEventListener('resize', () => Object.values(charts).forEach((c) => c.resize()))
+onActivated(() => { load(); resizeAll() })
 </script>
 
 <style scoped>
@@ -196,4 +198,7 @@ window.addEventListener('resize', () => Object.values(charts).forEach((c) => c.r
   border-radius: var(--card-radius); padding: 14px; margin-bottom: 6px;
 }
 .chart { height: 300px; }
+@media (max-width: 768px) {
+  .chart { height: 240px; }
+}
 </style>

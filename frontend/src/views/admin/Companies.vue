@@ -31,20 +31,20 @@
           <div class="label">本月支出</div><div class="value">¥{{ money(ov.expense) }}</div>
         </div>
       </div>
-      <el-descriptions :column="2" border size="small">
+      <el-descriptions :column="isMobile ? 1 : 2" border size="small">
         <el-descriptions-item label="待收款">¥{{ money(ov.pendingReceivable) }}</el-descriptions-item>
         <el-descriptions-item label="待付款">¥{{ money(ov.pendingPayment) }}</el-descriptions-item>
         <el-descriptions-item label="净现金流">¥{{ money(ov.netCashFlow) }}</el-descriptions-item>
         <el-descriptions-item label="待核对流水">{{ ov.unreconciledCount }} 笔</el-descriptions-item>
       </el-descriptions>
       <div class="section-title">账户</div>
-      <el-table :data="ov.accounts" size="small">
-        <el-table-column prop="name" label="账户" />
+      <ResponsiveTable :data="ov.accounts" size="small">
+        <el-table-column prop="name" label="账户" mobile="title" />
         <el-table-column prop="currency" label="币种" width="70" />
-        <el-table-column label="余额" align="right">
+        <el-table-column label="余额" align="right" mobile="amount">
           <template #default="{ row }"><span class="money">{{ money(row.balance) }}</span></template>
         </el-table-column>
-      </el-table>
+      </ResponsiveTable>
     </div>
   </el-dialog>
 </template>
@@ -56,6 +56,10 @@ import CrudTable from '@/components/CrudTable.vue'
 import api from '@/api'
 import { can } from '@/api/permissions'
 import { money } from '@/utils/format'
+import ResponsiveTable from '@/components/mobile/ResponsiveTable'
+import { useViewport } from '@/composables/useViewport'
+
+const { isMobile } = useViewport()
 
 const visible = ref(false)
 const current = ref(null)

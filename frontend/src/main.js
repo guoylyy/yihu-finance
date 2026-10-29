@@ -8,6 +8,7 @@ import App from './App.vue'
 import router from './router'
 import './assets/main.css'
 import './assets/element-vi.css'
+import './assets/mobile.css'
 
 const app = createApp(App)
 for (const [key, comp] of Object.entries(ElementPlusIconsVue)) app.component(key, comp)

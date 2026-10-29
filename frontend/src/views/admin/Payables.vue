@@ -82,7 +82,7 @@
 
       <el-form-item label="付款金额">
         <el-input-number v-model="payForm.amount" :precision="2" :min="0" :max="remain(current)"
-                         :step="100" style="width: 100%" />
+                         :step="100" style="width: 100%" inputmode="decimal" :controls="!isMobile" />
         <div class="muted" style="font-size: 12px">默认全额付清，改小即为部分付款</div>
       </el-form-item>
 
@@ -103,9 +103,9 @@
 
   <!-- 付款记录 -->
   <el-dialog v-model="listVisible" title="付款记录" width="640px">
-    <el-table :data="payList" size="small">
+    <ResponsiveTable :data="payList" size="small">
       <el-table-column prop="code" label="付款编号" width="150" />
-      <el-table-column label="金额" width="120" align="right">
+      <el-table-column label="金额" width="120" align="right" mobile="amount">
         <template #default="{ row }"><span class="money">{{ money(row.amount) }}</span></template>
       </el-table-column>
       <el-table-column label="付款账户" width="120">
@@ -114,7 +114,7 @@
       <el-table-column label="付款日" width="110">
         <template #default="{ row }">{{ date(row.paidDate) }}</template>
       </el-table-column>
-      <el-table-column label="状态" width="100">
+      <el-table-column label="状态" width="100" mobile="badge">
         <template #default="{ row }">
           <el-tag size="small" :type="tagOf(PAYMENT_STATUS, row.status)">{{ labelOf(PAYMENT_STATUS, row.status) }}</el-tag>
         </template>
@@ -122,8 +122,8 @@
       <el-table-column label="关联流水" min-width="130">
         <template #default="{ row }">{{ row.transaction?.code || '—' }}</template>
       </el-table-column>
-    </el-table>
-    <el-empty v-if="!payList.length" description="还没有付款记录" :image-size="60" />
+    </ResponsiveTable>
+    <el-empty v-if="!payList.length && !isMobile" description="还没有付款记录" :image-size="60" />
   </el-dialog>
 </template>
 
@@ -136,6 +136,10 @@ import { can } from '@/api/permissions'
 import { companies, accountsOf, loadMeta } from '@/composables/useMeta'
 import { PAYABLE_STATUS, PAYMENT_STATUS, BIZ_TYPES, labelOf, tagOf } from '@/constants'
 import { money, date } from '@/utils/format'
+import { useViewport } from '@/composables/useViewport'
+import ResponsiveTable from '@/components/mobile/ResponsiveTable'
+
+const { isMobile } = useViewport()
 
 const suppliers = ref([])
 const tableRef = ref(null)

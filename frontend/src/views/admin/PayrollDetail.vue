@@ -30,20 +30,20 @@
 
     <div class="section-title">银行支付批次（单文件上限 ¥50,000）</div>
     <div class="table-card" style="margin-bottom: 16px">
-      <el-table :data="batches.batches || []" size="small">
+      <ResponsiveTable :data="batches.batches || []" size="small">
         <el-table-column label="批次" width="80">
           <template #default="{ row }">第 {{ row.index }} 批</template>
         </el-table-column>
         <el-table-column prop="count" label="人数" width="70" align="right" />
-        <el-table-column label="金额合计" width="140" align="right">
+        <el-table-column label="金额合计" width="140" align="right" mobile="amount">
           <template #default="{ row }"><span class="money" style="font-weight: 600">{{ money(row.total) }}</span></template>
         </el-table-column>
-        <el-table-column label="人员" min-width="260">
+        <el-table-column label="人员" min-width="260" mobile="full">
           <template #default="{ row }">
             <span class="muted" style="font-size: 12px">{{ row.names.join('、') }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="提示" width="150">
+        <el-table-column label="提示" width="150" mobile="badge">
           <template #default="{ row }">
             <el-tag v-if="row.overLimit" size="small" type="danger">单笔超 5 万</el-tag>
             <el-tag v-else-if="row.missingAccount.length" size="small" type="warning">缺账号</el-tag>
@@ -55,8 +55,8 @@
             <el-button link type="primary" @click="downloadTemplate(row.index)">下载银行模板</el-button>
           </template>
         </el-table-column>
-      </el-table>
-      <div style="padding: 12px 4px 4px; display: flex; gap: 10px; align-items: center">
+      </ResponsiveTable>
+      <div class="gen-bar" style="padding: 12px 4px 4px; display: flex; gap: 10px; align-items: center">
         <el-button v-if="can('payroll.manage') && payroll.status === 'DRAFT'" type="primary" @click="genPayments">
           生成付款单（按批次）
         </el-button>
@@ -72,13 +72,13 @@
     <div v-if="payroll.payments?.length">
       <div class="section-title">关联付款单</div>
       <div class="table-card" style="margin-bottom: 16px">
-        <el-table :data="payroll.payments" size="small">
+        <ResponsiveTable :data="payroll.payments" size="small">
           <el-table-column prop="code" label="付款编号" width="150" />
-          <el-table-column prop="payeeName" label="收款方" min-width="200" />
-          <el-table-column label="金额" width="130" align="right">
+          <el-table-column prop="payeeName" label="收款方" min-width="200" mobile="title" />
+          <el-table-column label="金额" width="130" align="right" mobile="amount">
             <template #default="{ row }"><span class="money">{{ money(row.amount) }}</span></template>
           </el-table-column>
-          <el-table-column label="状态" width="110">
+          <el-table-column label="状态" width="110" mobile="badge">
             <template #default="{ row }">
               <el-tag size="small" :type="tagOf(PAYMENT_STATUS, row.status)">{{ labelOf(PAYMENT_STATUS, row.status) }}</el-tag>
             </template>
@@ -88,7 +88,7 @@
               <el-button link type="primary" @click="$router.push('/payments')">去付款管理</el-button>
             </template>
           </el-table-column>
-        </el-table>
+        </ResponsiveTable>
       </div>
     </div>
 
@@ -99,7 +99,7 @@
       </el-button>
     </div>
     <div class="table-card">
-      <el-table :data="payroll.items || []" size="small">
+      <ResponsiveTable :data="payroll.items || []" size="small">
         <el-table-column prop="name" label="姓名" width="100" />
         <el-table-column label="应发" width="110" align="right">
           <template #default="{ row }"><span class="money">{{ money(row.gross) }}</span></template>
@@ -113,7 +113,7 @@
         <el-table-column label="代扣个税" width="100" align="right">
           <template #default="{ row }"><span class="money">{{ money(row.deductTax) }}</span></template>
         </el-table-column>
-        <el-table-column label="实发" width="120" align="right">
+        <el-table-column label="实发" width="120" align="right" mobile="amount">
           <template #default="{ row }"><span class="money" style="font-weight: 600">{{ money(row.net) }}</span></template>
         </el-table-column>
         <el-table-column label="银行账号" min-width="180">
@@ -128,18 +128,18 @@
             <el-button v-if="can('payroll.manage') && payroll.status !== 'PAID'" link type="danger" @click="removeItem(row)">删除</el-button>
           </template>
         </el-table-column>
-      </el-table>
+      </ResponsiveTable>
     </div>
 
     <el-dialog v-model="itemVisible" :title="item.id ? '编辑工资明细' : '添加工资明细'" width="460px">
       <el-form :model="item" label-width="100px">
         <el-form-item label="姓名" required><el-input v-model="item.name" /></el-form-item>
-        <el-form-item label="应发工资"><el-input-number v-model="item.gross" :precision="2" style="width: 100%" /></el-form-item>
-        <el-form-item label="代扣社保"><el-input-number v-model="item.deductSocial" :precision="2" style="width: 100%" /></el-form-item>
-        <el-form-item label="代扣公积金"><el-input-number v-model="item.deductFund" :precision="2" style="width: 100%" /></el-form-item>
-        <el-form-item label="代扣个税"><el-input-number v-model="item.deductTax" :precision="2" style="width: 100%" /></el-form-item>
+        <el-form-item label="应发工资"><el-input-number v-model="item.gross" :precision="2" style="width: 100%" inputmode="decimal" :controls="!isMobile" /></el-form-item>
+        <el-form-item label="代扣社保"><el-input-number v-model="item.deductSocial" :precision="2" style="width: 100%" inputmode="decimal" :controls="!isMobile" /></el-form-item>
+        <el-form-item label="代扣公积金"><el-input-number v-model="item.deductFund" :precision="2" style="width: 100%" inputmode="decimal" :controls="!isMobile" /></el-form-item>
+        <el-form-item label="代扣个税"><el-input-number v-model="item.deductTax" :precision="2" style="width: 100%" inputmode="decimal" :controls="!isMobile" /></el-form-item>
         <el-form-item label="实发工资">
-          <el-input-number v-model="item.net" :precision="2" style="width: 100%" />
+          <el-input-number v-model="item.net" :precision="2" style="width: 100%" inputmode="decimal" :controls="!isMobile" />
           <div class="muted" style="font-size: 12px">留空按「应发 − 三项代扣」自动算</div>
         </el-form-item>
         <el-form-item label="银行账号"><el-input v-model="item.bankAccount" /></el-form-item>
@@ -160,6 +160,10 @@ import api, { download } from '@/api'
 import { can } from '@/api/permissions'
 import { PAYROLL_STATUS, PAYMENT_STATUS, labelOf, tagOf } from '@/constants'
 import { money, date } from '@/utils/format'
+import ResponsiveTable from '@/components/mobile/ResponsiveTable'
+import { useViewport } from '@/composables/useViewport'
+
+const { isMobile } = useViewport()
 
 const route = useRoute()
 const id = route.params.id
@@ -259,3 +263,10 @@ async function removeItem(row) {
 
 onMounted(load)
 </script>
+
+<style scoped>
+@media (max-width: 768px) {
+  .gen-bar { flex-wrap: wrap; }
+  .gen-bar .el-button { flex: 1 1 100%; margin: 0; }
+}
+</style>

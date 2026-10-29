@@ -34,17 +34,17 @@
 
     <div class="section-title">预测事项明细</div>
     <div class="table-card">
-      <el-table :data="data.events || []" size="small" max-height="460">
+      <ResponsiveTable :data="data.events || []" size="small" max-height="460">
         <el-table-column prop="date" label="日期" width="110" />
-        <el-table-column label="方向" width="70">
+        <el-table-column label="方向" width="70" mobile="badge">
           <template #default="{ row }">
             <el-tag size="small" :type="row.direction === 'IN' ? 'success' : 'danger'" effect="plain">
               {{ row.direction === 'IN' ? '流入' : '流出' }}
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="title" label="事项" min-width="240" show-overflow-tooltip />
-        <el-table-column label="金额" width="130" align="right">
+        <el-table-column prop="title" label="事项" min-width="240" show-overflow-tooltip mobile="title" />
+        <el-table-column label="金额" width="130" align="right" mobile="amount">
           <template #default="{ row }">
             <span class="money" :class="row.direction === 'IN' ? 'money-in' : 'money-out'">{{ money(row.amount) }}</span>
           </template>
@@ -52,17 +52,17 @@
         <el-table-column label="来源" width="110">
           <template #default="{ row }">{{ SOURCE[row.source] || row.source }}</template>
         </el-table-column>
-        <el-table-column label="把握度" width="100">
+        <el-table-column label="把握度" width="100" mobile="badge">
           <template #default="{ row }">
             <el-tag size="small" :type="tagOf(CONFIDENCE, row.confidence)">{{ labelOf(CONFIDENCE, row.confidence) }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="提示" width="90">
+        <el-table-column label="提示" width="90" mobile="badge">
           <template #default="{ row }">
             <el-tag v-if="row.overdue" size="small" type="danger">已逾期</el-tag>
           </template>
         </el-table-column>
-      </el-table>
+      </ResponsiveTable>
     </div>
 
     <el-drawer v-model="itemsVisible" title="固定周期收支" size="720px">
@@ -78,20 +78,21 @@
 <script setup>
 import { ref, onMounted, nextTick, onActivated } from 'vue'
 import { ElMessage } from 'element-plus'
-import * as echarts from 'echarts'
+import { useCharts } from '@/composables/useCharts'
 import CrudTable from '@/components/CrudTable.vue'
 import api from '@/api'
 import { can } from '@/api/permissions'
 import { companies, loadMeta } from '@/composables/useMeta'
 import { CONFIDENCE, labelOf, tagOf } from '@/constants'
 import { money } from '@/utils/format'
+import ResponsiveTable from '@/components/mobile/ResponsiveTable'
 
 const loading = ref(false)
 const companyId = ref('')
 const data = ref({})
 const itemsVisible = ref(false)
 const curveRef = ref(null)
-let curveChart = null
+const { render: renderChart } = useCharts()
 
 const SOURCE = { RECEIVABLE: '应收款', PAYMENT: '付款单', FIXED: '固定收支' }
 const companyOptions = () => companies.value.map((c) => ({ value: String(c.id), label: c.code }))
@@ -134,9 +135,8 @@ async function load() {
 
 function renderCurve() {
   if (!curveRef.value) return
-  curveChart = curveChart || echarts.init(curveRef.value)
   const curve = data.value.curve || []
-  curveChart.setOption({
+  renderChart(curveRef.value, {
     grid: { left: 66, right: 20, top: 20, bottom: 30 },
     tooltip: { trigger: 'axis', valueFormatter: (v) => '¥' + money(v) },
     xAxis: {
@@ -158,7 +158,6 @@ function renderCurve() {
 
 onActivated(() => load())
 onMounted(async () => { await loadMeta(); load() })
-window.addEventListener('resize', () => curveChart?.resize())
 </script>
 
 <style scoped>
@@ -167,4 +166,7 @@ window.addEventListener('resize', () => curveChart?.resize())
   border-radius: var(--card-radius); padding: 14px; margin-bottom: 6px;
 }
 .chart { height: 280px; }
+@media (max-width: 768px) {
+  .chart { height: 240px; }
+}
 </style>

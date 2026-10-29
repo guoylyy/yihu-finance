@@ -23,8 +23,8 @@ function loadUi() {
 
 export const useAssistantStore = defineStore('assistant', () => {
   const saved = loadUi()
-  // 没存过偏好时：宽屏默认展开，窄屏（<1280）默认收起
-  const open = ref(saved?.open ?? window.innerWidth >= 1280)
+  // 没存过偏好时：宽屏默认展开，窄屏（<1280）默认收起；手机（≤768）上助手是全屏 sheet，进来一律收起
+  const open = ref(window.innerWidth <= 768 ? false : saved?.open ?? window.innerWidth >= 1280)
   const width = ref(Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, saved?.width || 380)))
   const pinned = ref([])        // [{ type, id, label }]，label 只用于显示，服务端按 id 重查
   const messages = ref([])      // [{ role, content, drafts?, warnings? }]

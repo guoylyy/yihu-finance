@@ -16,7 +16,11 @@
       </div>
     </div>
 
-    <div class="filter-bar">
+    <FilterBar :active="activeFilters" @done="reload">
+      <template v-if="isMobile" #bar>
+        <el-input v-model="q.keyword" placeholder="搜索对方名称 / 备注 / 编号" clearable :prefix-icon="Search"
+                  enterkeyhint="search" @keyup.enter="reload" @clear="reload" />
+      </template>
       <el-select v-model="q.company_id" placeholder="全部公司" clearable style="width: 130px" @change="reload">
         <el-option v-for="c in companies" :key="c.id" :label="c.code" :value="c.id" />
       </el-select>
@@ -34,11 +38,11 @@
       </el-select>
       <el-date-picker v-model="dateRange" type="daterange" value-format="YYYY-MM-DD" style="width: 230px"
                       start-placeholder="开始日期" end-placeholder="结束日期" @change="onDateChange" />
-      <el-input v-model="q.keyword" placeholder="搜索对方名称 / 备注 / 编号" clearable style="width: 200px"
+      <el-input v-if="!isMobile" v-model="q.keyword" placeholder="搜索对方名称 / 备注 / 编号" clearable style="width: 200px"
                 @keyup.enter="reload" @clear="reload" />
-      <el-button type="primary" @click="reload">查询</el-button>
+      <el-button v-if="!isMobile" type="primary" @click="reload">查询</el-button>
       <el-button text @click="resetFilter">重置</el-button>
-    </div>
+    </FilterBar>
 
     <div class="stat-grid">
       <div class="stat-card is-success">
@@ -70,24 +74,24 @@
     </div>
 
     <div class="table-card">
-      <el-table ref="tableRef" :data="list" v-loading="loading" @selection-change="selection = $event" size="small">
+      <ResponsiveTable ref="tableRef" :data="list" v-loading="loading" @selection-change="selection = $event" size="small">
         <el-table-column type="selection" width="40" />
         <el-table-column prop="txnDate" label="日期" width="98">
           <template #default="{ row }">{{ date(row.txnDate) }}</template>
         </el-table-column>
-        <el-table-column label="公司/账户" width="150">
+        <el-table-column label="公司/账户" width="150" mobile="full">
           <template #default="{ row }">
             <div>{{ row.company?.code }}</div>
             <div class="muted" style="font-size: 12px">{{ row.account?.name }}</div>
           </template>
         </el-table-column>
-        <el-table-column label="对方名称 / 备注" min-width="200">
+        <el-table-column label="对方名称 / 备注" min-width="200" mobile="title">
           <template #default="{ row }">
             <div>{{ row.counterparty || '—' }}</div>
             <div class="muted" style="font-size: 12px">{{ row.remark }}</div>
           </template>
         </el-table-column>
-        <el-table-column label="业务类型" width="110">
+        <el-table-column label="业务类型" width="110" mobile="badge">
           <template #default="{ row }">
             <el-tag size="small" effect="plain">{{ BIZ_LABEL[row.bizType] || row.bizType }}</el-tag>
           </template>
@@ -95,14 +99,14 @@
         <el-table-column label="分类" width="110">
           <template #default="{ row }">{{ row.category?.name || '—' }}</template>
         </el-table-column>
-        <el-table-column label="金额" width="130" align="right">
+        <el-table-column label="金额" width="130" align="right" mobile="amount">
           <template #default="{ row }">
             <span class="money" :class="row.direction === 'IN' ? 'money-in' : 'money-out'">
               {{ row.direction === 'IN' ? '+' : '−' }}{{ money(row.amount) }}
             </span>
           </template>
         </el-table-column>
-        <el-table-column label="状态" width="90">
+        <el-table-column label="状态" width="90" mobile="badge">
           <template #default="{ row }">
             <el-tag size="small" :type="tagOf(TXN_STATUS, row.status)">{{ labelOf(TXN_STATUS, row.status) }}</el-tag>
           </template>
@@ -115,9 +119,9 @@
             <el-button v-if="can('transaction.manage')" link type="danger" @click="remove(row)">作废</el-button>
           </template>
         </el-table-column>
-      </el-table>
+      </ResponsiveTable>
       <div class="pager">
-        <el-pagination v-model:current-page="page" v-model:page-size="pageSize" :total="total"
+        <ResponsivePager v-model:current-page="page" v-model:page-size="pageSize" :total="total"
                        :page-sizes="[20, 50, 100, 200]" layout="total, sizes, prev, pager, next" @change="load" />
       </div>
     </div>
@@ -145,7 +149,8 @@
           </el-radio-group>
         </el-form-item>
         <el-form-item label="金额" required>
-          <el-input-number v-model="form.amount" :precision="2" :min="0" :step="100" style="width: 100%" />
+          <el-input-number v-model="form.amount" :precision="2" :min="0" :step="100" style="width: 100%"
+                           inputmode="decimal" :controls="!isMobile" />
         </el-form-item>
         <el-form-item label="对方名称">
           <el-input v-model="form.counterparty" placeholder="客户 / 供应商 / 收款人" />
@@ -178,7 +183,8 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted, onActivated } from 'vue'
+import { ref, reactive, computed, onMounted, onActivated } from 'vue'
+import { Search } from '@element-plus/icons-vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import api, { download } from '@/api'
@@ -188,6 +194,12 @@ import { BIZ_TYPES, BIZ_LABEL, TXN_STATUS, labelOf, tagOf } from '@/constants'
 import { money, date } from '@/utils/format'
 import PinButton from '@/components/PinButton.vue'
 import { useDraftReceiver } from '@/stores/assistant'
+import ResponsiveTable from '@/components/mobile/ResponsiveTable'
+import ResponsivePager from '@/components/mobile/ResponsivePager'
+import FilterBar from '@/components/mobile/FilterBar.vue'
+import { useViewport } from '@/composables/useViewport'
+
+const { isMobile } = useViewport()
 
 const route = useRoute()
 const loading = ref(false)
@@ -198,6 +210,7 @@ const page = ref(1)
 const pageSize = ref(20)
 const stat = ref({})
 const selection = ref([])
+const activeFilters = computed(() => ['company_id', 'account_id', 'direction', 'biz_type', 'status'].filter((k) => q[k]).length + (dateRange.value?.length ? 1 : 0))
 const tableRef = ref(null)
 const dateRange = ref([])
 const q = reactive({ company_id: '', account_id: '', direction: '', biz_type: '', status: '', keyword: '', date_from: '', date_to: '' })
