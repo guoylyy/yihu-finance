@@ -26,7 +26,6 @@
     <div class="a-context">
       <el-tag size="small" effect="plain" class="ctx-page">
         <el-icon style="vertical-align: -2px"><Location /></el-icon> {{ route.meta.title || route.path }}
-        <span v-if="!draftPage" class="muted">（只读问答）</span>
       </el-tag>
       <el-tag v-for="p in store.pinned" :key="`${p.type}:${p.id}`" size="small" closable class="ctx-pin"
               @close="store.unpin(p)">
@@ -37,7 +36,7 @@
 
     <div ref="listRef" class="a-messages">
       <div v-if="!store.messages.length" class="a-empty">
-        <p>说一句话，我来填表单，例如：</p>
+        <p>说一句话，我来填表单，在哪个页面都能录，一句话也可以说几件事。例如：</p>
         <p class="eg" @click="input = EXAMPLES[draftKind] || EXAMPLES.receivable">「{{ EXAMPLES[draftKind] || EXAMPLES.receivable }}」</p>
       </div>
       <div v-for="(m, i) in store.messages" :key="i" class="msg" :class="m.role">
@@ -85,7 +84,7 @@ function dragEnd() {
   dragFrom = null
 }
 
-const TYPE_LABEL = { company: '公司', customer: '客户', project: '项目', account: '账户', receivable: '应收', invoice: '发票', transaction: '流水' }
+const TYPE_LABEL = { company: '公司', customer: '客户', supplier: '供应商', project: '项目', account: '账户', receivable: '应收', invoice: '发票', transaction: '流水' }
 const EXAMPLES = {
   receivable: '录一笔应收：客户 12，金额 128000，月底到期',
   invoice: '录一张进项发票：发票号 12345678，金额 10600，税额 600，今天开的',
@@ -93,7 +92,6 @@ const EXAMPLES = {
   account: '新开一个账户：叫 招行基本户，开户行 招商银行，期初 0'
 }
 const draftKind = computed(() => Object.entries(DRAFT_PAGES).find(([, p]) => p.route === route.path)?.[0])
-const draftPage = computed(() => !!draftKind.value)
 
 // 手机没有 Shift 键：软键盘回车只换行，点「发送」按钮发送
 const inputHint = computed(() => (isMobile.value ? '点「发送」按钮发送，回车换行' : 'Enter 发送，Shift+Enter 换行'))

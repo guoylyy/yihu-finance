@@ -112,6 +112,7 @@ import { companies, accountsOf, loadMeta } from '@/composables/useMeta'
 import { RECEIVABLE_STATUS, CONFIDENCE } from '@/constants'
 import { money } from '@/utils/format'
 import { useViewport } from '@/composables/useViewport'
+import { useDraftReceiver } from '@/stores/assistant'
 
 const { isMobile } = useViewport()
 
@@ -193,6 +194,25 @@ function openReceipt(row) {
   }
   receiptVisible.value = true
 }
+
+// 录入助手的回款草稿「填入表单」：打开这笔应收的登记回款弹窗，带上草稿里的账户 / 金额 / 日期
+async function openReceiptPrefill(p) {
+  if (!p.payload.refId) return ElMessage.warning('请先在草稿卡上选要冲减的应收')
+  try {
+    openReceipt(await api.receivables.get(p.payload.refId))
+    const { accountId, amount, txnDate, remark } = p.payload
+    receipt.value = {
+      ...receipt.value,
+      ...(accountId ? { accountId } : {}),
+      ...(amount ? { amount: Number(amount) } : {}),
+      ...(txnDate ? { receiptDate: txnDate } : {}),
+      ...(remark ? { remark } : {})
+    }
+  } catch (e) {
+    ElMessage.error(e.message)
+  }
+}
+useDraftReceiver('receipt', { onPrefill: openReceiptPrefill })
 
 async function submitReceipt() {
   saving.value = true

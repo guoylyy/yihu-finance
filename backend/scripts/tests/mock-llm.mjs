@@ -2,6 +2,7 @@
 // 用法：最后一条用户消息里带标记决定上游怎么回——
 //   [[500]] / [[503]] / [[nonjson]] / [[slow]]（不回，直到后端自己超时断开） / [[loop]]（永远要求调工具）
 //   [[script:名字]]：返回 scripts 里登记的工具调用；工具结果回来后给一句收尾文字
+//   [[steps:名字]]：scripts 里登记多轮工具调用，一轮一轮返回（模拟模型看了工具结果后重出草稿），走完给收尾文字
 import http from 'node:http'
 import net from 'node:net'
 import { spawn } from 'node:child_process'
@@ -44,6 +45,12 @@ export async function startMockLlm() {
       if (lastUser.includes('[[nonjson]]')) { res.writeHead(200, { 'Content-Type': 'text/html' }); return res.end('<html>gateway</html>') }
       if (lastUser.includes('[[slow]]')) return // 不回：等后端的 AbortSignal 超时断开
       if (lastUser.includes('[[loop]]')) return tools([['list_companies', {}]])
+      const steps = lastUser.match(/\[\[steps:([\w-]+)\]\]/)
+      if (steps) {
+        const round = msgs.filter((x) => x.role === 'assistant' && x.tool_calls?.length).length
+        const calls = scripts.get(steps[1])?.[round]
+        return calls ? tools(calls) : text('（mock）已处理')
+      }
       const m = lastUser.match(/\[\[script:([\w-]+)\]\]/)
       if (m) {
         if (last?.role === 'tool') return text('（mock）已处理')

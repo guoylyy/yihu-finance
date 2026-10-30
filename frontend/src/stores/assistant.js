@@ -8,14 +8,15 @@ const UI_KEY = 'fin_assistant_ui'
 export const MIN_WIDTH = 320
 export const MAX_WIDTH = 640
 
-// 草稿类型 → 页面路由 / 中文名
+// 草稿类型 → 页面路由 / 中文名 / 徽章文字。receipt 不是单独的草稿类型：冲减应收的流水草稿，「填入表单」要去登记回款弹窗
 export const DRAFT_PAGES = {
-  account: { route: '/accounts', label: '账户' },
-  receivable: { route: '/receivables', label: '应收款' },
-  invoice: { route: '/invoices', label: '发票' },
-  transaction: { route: '/transactions', label: '流水' }
+  account: { route: '/accounts', label: '账户', badge: '账户' },
+  receivable: { route: '/receivables', label: '应收款', badge: '应收' },
+  invoice: { route: '/invoices', label: '发票', badge: '发票' },
+  transaction: { route: '/transactions', label: '流水', badge: '流水' },
+  receipt: { route: '/receivables', label: '回款', badge: '回款' }
 }
-export const DRAFT_ROUTES = Object.values(DRAFT_PAGES).map((p) => p.route)
+export const draftPageKey = (draft) => (draft.kind === 'transaction' && draft.payload?.refType === 'RECEIVABLE' ? 'receipt' : draft.kind)
 
 function loadUi() {
   try { return JSON.parse(localStorage.getItem(UI_KEY) || 'null') } catch { return null }
@@ -45,7 +46,7 @@ export const useAssistantStore = defineStore('assistant', () => {
   const isPinned = (type, id) => pinned.value.some((p) => p.type === type && p.id === String(id))
 
   function requestPrefill(draft) {
-    prefill.value = { kind: draft.kind, mode: draft.mode, id: draft.id, payload: { ...draft.payload }, nonce: Date.now() }
+    prefill.value = { kind: draftPageKey(draft), mode: draft.mode, id: draft.id, payload: { ...draft.payload }, nonce: Date.now() }
   }
   function takePrefill(kind) {
     if (prefill.value?.kind !== kind) return null

@@ -158,6 +158,17 @@ async function audit() {
   await page.locator('.a-input .el-button--primary').click()
   await page.locator('.draft').first().waitFor({ timeout: 15000 }).catch(() => {})
   await check('[助手] 草稿卡', '.draft')
+  // 跨类型：账户页出流水 + 发票两种草稿，徽章和按钮不能撑宽；「填入表单」跳到发票页打开弹窗
+  await open(page, 'accounts', payrollId)
+  await openAssistant(page)
+  await page.locator('.a-input textarea').fill('记两笔收款，1000 和 2000，再开一张 1000 的发票')
+  await page.locator('.a-input .el-button--primary').click()
+  await page.locator('.draft').nth(2).waitFor({ timeout: 15000 }).catch(() => {})
+  await check('[助手] 跨类型草稿卡', '.draft .kind-badge')
+  await page.locator('.draft').filter({ hasText: '发票类型' }).locator('.draft-actions .el-button').first().click().catch(() => {})
+  await page.waitForTimeout(800)
+  await check('[助手] 跨页填入表单', '.el-dialog')
+  await page.keyboard.press('Escape'); await page.waitForTimeout(300)
   for (const route of ['transactions', 'accounts']) {
     await open(page, route, payrollId)
     await page.locator('.page-head .el-button--primary').first().click().catch(() => {})
@@ -174,8 +185,28 @@ async function audit() {
   rows.push(await hintRow(dp, 1280))
   await desk.close()
 
+  // 平板 / 桌面：逐路由 + 助手跨类型草稿卡
+  for (const w of [768, 1440]) {
+    const c = await browser.newContext({ storageState: state, viewport: { width: w, height: HEIGHT[w] } })
+    const p = await c.newPage()
+    const at = async (name) => {
+      const r = await p.evaluate(FIND_OVERFLOW, w)
+      rows.push({ name: `${w} ${name}`, pass: r.scrollWidth <= w + 1 && r.docWidth <= w + 1 && !r.bad.length, scrollWidth: r.scrollWidth, bad: r.bad })
+    }
+    await p.goto(`${APP}/dashboard`)
+    await p.evaluate(() => localStorage.setItem('fin_assistant_ui', JSON.stringify({ open: false, width: 380 })))
+    for (const route of ROUTES) { await open(p, route, payrollId); await at(route) }
+    await open(p, 'accounts', payrollId)
+    await openAssistant(p)
+    await p.locator('.a-input textarea').fill('记两笔收款，1000 和 2000，再开一张 1000 的发票')
+    await p.locator('.a-input .el-button--primary').click()
+    await p.locator('.draft').nth(2).waitFor({ timeout: 15000 }).catch(() => {})
+    await at('[助手] 跨类型草稿卡')
+    await c.close()
+  }
+
   await browser.close()
-  console.log('\n| 页面 | 375 通过 | body.scrollWidth | 违规元素 |')
+  console.log('\n| 页面（无前缀为 375） | 通过 | body.scrollWidth | 违规元素 |')
   console.log('|---|---|---|---|')
   for (const r of rows) console.log(`| ${r.name} | ${r.pass ? '✅' : '❌'} | ${r.scrollWidth} | ${r.bad.length ? r.bad.join('<br>') : '—'} |`)
   const failed = rows.filter((r) => !r.pass).length

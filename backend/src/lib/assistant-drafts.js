@@ -115,7 +115,10 @@ const SPECS = {
       f('counterparty', 'counterparty', '对方名称', str(120)),
       f('summary', 'remark', '摘要', str(500)),
       f('bizType', 'bizType', '业务类型', z.enum([...new Set([...BIZ_IN, ...BIZ_OUT])])),
-      f('project_id', 'projectId', '项目', idSchema, { ref: 'project' })
+      f('project_id', 'projectId', '项目', idSchema, { ref: 'project' }),
+      // 回款：引用发票 / 应收。refId 冲减哪笔应收（带上后「确认提交」走登记回款接口，见 lib/assistant-submit.js）
+      f('invoice_id', 'invoiceId', '关联发票', idSchema, { ref: 'invoice' }),
+      f('receivable_id', 'refId', '冲减应收', idSchema, { ref: 'receivable' })
     ]
   }
 }
@@ -123,6 +126,10 @@ const SPECS = {
 export const fieldLabels = (kind) => Object.fromEntries(SPECS[kind].fields.map((x) => [x.key, x.label]))
 
 const short = (v) => { const s = typeof v === 'string' ? v : JSON.stringify(v); return s.length > 30 ? s.slice(0, 30) + '…' : s }
+
+const RECEIVABLE_SELECT = { id: true, code: true, title: true, amount: true, receivedAmount: true, status: true, companyId: true }
+const receivableLabel = (r) => `${r.code} ${r.title}`
+const remainingOf = (r) => dec(r.amount).minus(r.receivedAmount)
 
 // ---------- 引用核对：id 必须真实存在且在当前用户的数据范围内 ----------
 async function loadRef(ref, id, user) {
@@ -145,6 +152,14 @@ async function loadRef(ref, id, user) {
     const r = await prisma.account.findFirst({ where: { id: bid, deletedAt: null, ...scopeWhere(user) }, select: { id: true, name: true, companyId: true, currency: true, status: true } })
     return r && { row: r, label: r.name }
   }
+  if (ref === 'invoice') {
+    const r = await prisma.invoice.findFirst({ where: { id: bid, deletedAt: null, ...scopeWhere(user) }, select: { id: true, invoiceNo: true, type: true, totalAmount: true, buyerName: true, customerId: true, companyId: true } })
+    return r && { row: r, label: r.invoiceNo }
+  }
+  if (ref === 'receivable') {
+    const r = await prisma.receivable.findFirst({ where: { id: bid, deletedAt: null, ...scopeWhere(user) }, select: RECEIVABLE_SELECT })
+    return r && { row: r, label: receivableLabel(r) }
+  }
   return null
 }
 
@@ -158,6 +173,62 @@ async function matchByName(ref, name, user) {
   if (ref === 'account') return (await prisma.account.findMany({ where: { deletedAt: null, ...scopeWhere(user), OR: [{ name: { contains: kw } }, { bankName: { contains: kw } }] }, select: { id: true, name: true }, take })).map((r) => ({ id: String(r.id), label: r.name }))
   if (ref === 'project') return (await prisma.project.findMany({ where: { deletedAt: null, ...scopeWhere(user), name: { contains: kw } }, select: { id: true, name: true }, take })).map((r) => ({ id: String(r.id), label: r.name }))
   return []
+}
+
+/**
+ * 回款：流水引用了发票 / 应收时，带出方向、金额、对方，并定位要冲减的应收。
+ * 发票表和应收表没有外键，只能按「同公司 + 同客户 + 未收清」找：剩余金额正好等于价税合计且只有一笔才自动挂上，
+ * 其余情况列候选让用户选——挂错了会把回款记到别的合同上，不猜
+ */
+async function fillReceipt({ args, payload, labels, refRows, missing, warnings, candidates }) {
+  if (payload.direction === 'OUT') {
+    warnings.push('支出不能冲减应收，已移除引用的应收')
+    delete payload.refId; delete labels.refId; delete refRows.refId
+    return
+  }
+  payload.direction ||= 'IN'
+  const inv = refRows.invoiceId
+  if (inv && inv.type !== 'SALES') warnings.push(`发票 ${inv.invoiceNo} 不是销项发票，一般不会有回款，请核对`)
+  if (inv?.buyerName && !payload.counterparty) payload.counterparty = inv.buyerName
+
+  let ar = refRows.refId
+  if (!ar && inv) {
+    const open = inv.customerId
+      ? await prisma.receivable.findMany({ where: { deletedAt: null, companyId: inv.companyId, customerId: inv.customerId, status: { in: ['PENDING', 'PARTIAL'] } }, select: RECEIVABLE_SELECT, orderBy: { id: 'desc' }, take: 200 })
+      : []
+    const exact = open.filter((r) => remainingOf(r).eq(inv.totalAmount))
+    if (exact.length === 1) {
+      ar = exact[0]
+      payload.refId = String(ar.id)
+      labels.refId = receivableLabel(ar)
+      warnings.push(`按客户和金额匹配到应收 ${labels.refId}，提交后冲减这笔应收，请核对`)
+    } else if (open.length) {
+      candidates.refId = open.slice(0, 6).map((r) => ({ id: String(r.id), label: receivableLabel(r) }))
+      missing.push('refId')
+      warnings.push(`这个客户有 ${open.length} 笔未收清的应收，请选要冲减哪一笔`)
+    } else {
+      warnings.push('没找到对应的未收清应收：提交后只记一笔流水，不会冲减应收')
+    }
+  }
+  if (ar) {
+    if (ar.status === 'RECEIVED') warnings.push(`应收 ${labels.refId} 已收清，请核对是否重复回款`)
+    if (payload.amount && dec(payload.amount).gt(remainingOf(ar))) warnings.push(`回款金额超过应收剩余 ${remainingOf(ar).toFixed(2)}，请核对`)
+  }
+  if (ar || candidates.refId) {
+    payload.refType = 'RECEIVABLE'
+    payload.bizType = 'SALES_RECEIPT'
+  } else if (!payload.bizType) {
+    payload.bizType = 'SALES_RECEIPT'
+  }
+  // 用户没说金额才带出；说了但不合法的保持「待补充」，不能悄悄换成发票金额
+  const amountGiven = !['', null, undefined].includes(args.amount)
+  if (!amountGiven && !payload.amount) {
+    const v = ar ? remainingOf(ar).toFixed(2) : inv ? dec(inv.totalAmount).toFixed(2) : null
+    if (v && dec(v).gt(0)) {
+      payload.amount = v
+      warnings.push(`金额按${ar ? '应收剩余' : '发票价税合计'}带出为 ${v}，请核对`)
+    }
+  }
 }
 
 /**
@@ -216,7 +287,7 @@ export async function buildDraft(kind, args, user) {
   // （指定了公司但被拒绝——不存在或无权访问——不能悄悄换成另一家，否则会把 B 公司的账记到 A 公司）
   const companyAsked = ['company_id', 'companyId', 'company_name'].some((k) => args[k] !== undefined && args[k] !== null && args[k] !== '')
   if (!payload.companyId) {
-    const from = ['accountId', 'projectId', 'customerId'].find((k) => refRows[k]?.companyId)
+    const from = ['refId', 'invoiceId', 'accountId', 'projectId', 'customerId'].find((k) => refRows[k]?.companyId)
     if (from) {
       const c = await loadRef('company', String(refRows[from].companyId), user)
       if (c) { payload.companyId = String(c.row.id); labels.companyId = c.label; warnings.push(`所属公司按${fieldLabels(kind)[from]}带出为「${c.label}」，请核对`) }
@@ -229,7 +300,7 @@ export async function buildDraft(kind, args, user) {
   // 引用的客户 / 项目 / 账户必须和记录属于同一家公司（模型可能填了别家公司的 id；客户不挂公司的视为通用）
   const targetCompany = payload.companyId || (existing?.companyId != null ? String(existing.companyId) : null)
   if (targetCompany) {
-    for (const k of ['customerId', 'projectId']) {
+    for (const k of ['customerId', 'projectId', 'invoiceId', 'refId']) {
       const r = refRows[k]
       if (r?.companyId && String(r.companyId) !== targetCompany) {
         warnings.push(`${fieldLabels(kind)[k]}「${labels[k]}」不属于所选公司，已移除${fieldLabels(kind)[k]}`)
@@ -244,6 +315,7 @@ export async function buildDraft(kind, args, user) {
       delete payload.accountId; delete labels.accountId
     }
     if (acc && acc.status !== 'ACTIVE') warnings.push(`账户「${acc.name}」不是启用状态`)
+    if (mode === 'create' && (refRows.invoiceId || refRows.refId)) await fillReceipt({ args, payload, labels, refRows, missing, warnings, candidates })
     if (payload.direction) {
       const allowed = payload.direction === 'IN' ? BIZ_IN : BIZ_OUT
       if (payload.bizType && !allowed.includes(payload.bizType)) { warnings.push(`业务类型 ${payload.bizType} 与收支方向不符，已改为默认`); delete payload.bizType }
@@ -303,7 +375,10 @@ const P = {
   date: (d) => ({ type: 'string', description: `${d}，格式 YYYY-MM-DD` }),
   e: (values, d) => ({ type: 'string', enum: values, description: d })
 }
-const editId = (label) => ({ id: P.id(`要修改的${label} id；新增时不传`) })
+const editId = (label) => ({
+  id: P.id(`要修改的${label} id，只能填这种记录自己的 id；新增时不传`),
+  draft_no: { type: 'integer', description: '这句话里第几件事（从 1 开始）。一句话要出多张草稿时必传；同一张草稿补全后重出时沿用原编号' }
+})
 
 export const DRAFT_TOOLS = {
   account: {
@@ -346,7 +421,8 @@ export const DRAFT_TOOLS = {
       company_id: P.id('公司 id'), account_id: P.id('账户 id'), account_name: P.s('不知道 id 时给账户名称'),
       txnDate: P.date('交易日期'), direction: P.e(['IN', 'OUT'], 'IN 收入 / OUT 支出'),
       amount: P.money('金额，恒为正数，方向看 direction'), counterparty: P.s('对方名称'), summary: P.s('摘要/备注'),
-      bizType: P.e([...new Set([...BIZ_IN, ...BIZ_OUT])], '业务类型，不确定就不传'), project_id: P.id('项目 id')
+      bizType: P.e([...new Set([...BIZ_IN, ...BIZ_OUT])], '业务类型，不确定就不传'), project_id: P.id('项目 id'),
+      invoice_id: P.id('回款：这笔钱对应的发票 id'), receivable_id: P.id('回款：要冲减的应收款 id')
     }
   }
 }

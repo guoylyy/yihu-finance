@@ -50,9 +50,10 @@ export default async function run(t) {
     assert.ok(d.drafts.length && d.drafts[0].warnings.some((w) => w.includes('不存在或无权访问')), JSON.stringify(d.drafts.map((x) => x.warnings)))
   }, W)
 
-  await check('B', '只看 A 公司的财务 @ 了 B 公司的发票 → 引用被服务端剔除，不出 update 草稿', async () => {
-    const d = await say('financeA', '把金额改成 2000', ctx('/invoices', [pin('invoice', fx.invB.id)]))
-    assert.ok(!d.drafts.some((x) => x.mode === 'update'), JSON.stringify(d.drafts))
+  await check('B', '只看 A 公司的财务 @ 了 B 公司的发票 → 9004 拒绝，不出 update 草稿', async () => {
+    const r = await t.api.chat(fx.tokens.financeA, '把金额改成 2000', ctx('/invoices', [pin('invoice', fx.invB.id)]))
+    assert.equal(r.json.code, 9004, JSON.stringify(r.json).slice(0, 160))
+    assert.equal(r.json.data?.drafts, undefined)
   }, W)
 
   await check('B', '修改不存在的 id → 不出 update 草稿 + warning', async () => {

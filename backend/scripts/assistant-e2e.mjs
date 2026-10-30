@@ -13,7 +13,7 @@ import { chromeAvailable } from './tests/browser.mjs'
 const GROUPS = [
   ['S', '冒烟', 's-smoke'], ['A', '四类草稿全覆盖', 'a-drafts'], ['B', '修改模式', 'b-update'], ['C', '数据范围与越权', 'c-scope'],
   ['D', '权限矩阵', 'd-perms'], ['E', '降级（mock 上游）', 'e-degrade'], ['F', '安全', 'f-security'], ['G', '边界值', 'g-boundary'],
-  ['H', '幂等与并发', 'h-concurrency'], ['I', '业务回归', 'i-business'], ['J', '性能基线', 'j-perf']
+  ['H', '幂等与并发', 'h-concurrency'], ['I', '业务回归', 'i-business'], ['J', '性能基线', 'j-perf'], ['K', '跨页面操作', 'k-cross-page']
 ]
 
 const opts = parseOptions(process.argv.slice(2))

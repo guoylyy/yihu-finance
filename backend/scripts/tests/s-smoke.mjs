@@ -15,11 +15,12 @@ export default async function run(t) {
     const s = await t.api.data('GET', '/api/fin/assistant/status', token())
     assert.equal(s.available, true, s.reason)
     assert.equal(s.stub, t.mode === 'stub')
-    assert.deepEqual([...s.draftRoutes].sort(), ['/accounts', '/invoices', '/receivables', '/transactions'])
+    assert.deepEqual([...s.draftKinds].sort(), ['account', 'invoice', 'receivable', 'transaction'])
+    assert.deepEqual([...s.draftRoutes].sort(), ['/accounts', '/invoices', '/receivables', '/transactions']) // 旧字段保留以兼容
   })
-  await check('S', '非录入页面（/dashboard）只问答、不出草稿', async () => {
+  await check('S', '任何页面都能出草稿：/dashboard 说录应收 → receivable 草稿', async () => {
     const d = assertChatShape(await t.api.chat(token(), '录一笔应收：金额 128000，月底到期', ctx('/dashboard')))
-    assert.equal(d.drafts.length, 0)
+    if (t.mode === 'stub') assert.deepEqual(d.drafts.map((x) => x.kind), ['receivable'])
   })
   await check('S', '四个录入页面各说一句：结构合法，且业务表行数不变（助手不写库）', async () => {
     const totals = async () => {

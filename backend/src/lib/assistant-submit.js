@@ -89,6 +89,19 @@ async function selfRequest(token, method, url, body) {
   return { status: r.status, json }
 }
 
+// 回款草稿走登记回款接口（回填已收金额、生成 SALES_RECEIPT 流水）；走普通新增流水的话，钱进了账，应收却不会冲减
+async function submitReceipt(token, payload) {
+  if (!payload.refId) return { status: 200, json: { code: 9002, message: '请先选择要冲减的应收', data: null } }
+  const r = await selfRequest(token, 'POST', `/api/fin/receivables/${payload.refId}/receipt`, {
+    accountId: payload.accountId, amount: payload.amount, receiptDate: payload.txnDate, remark: payload.remark
+  })
+  if (r.json?.code !== 0) return r
+  const txn = r.json.data.transaction
+  // 回款已入账，关联发票失败不回滚，用户可在发票台账手工关联
+  if (payload.invoiceId) await selfRequest(token, 'POST', `/api/fin/invoices/${payload.invoiceId}/link-transaction`, { transactionId: String(txn.id) }).catch(() => {})
+  return { status: r.status, json: { ...r.json, data: txn } }
+}
+
 const codeOf = (kind, rec) => String(rec?.code ?? (kind === 'invoice' ? rec?.invoiceNo : rec?.name) ?? '').slice(0, 120) || null
 
 /** 草稿锁：拿到返回 true；拿不到说明同一张草稿正在被另一个请求提交 */
@@ -185,7 +198,9 @@ export async function submitDraft({ id, user, token, payload: bodyPayload }) {
     sub = claim.own
     const r = draft.mode === 'update'
       ? await selfRequest(token, 'PUT', `${mod.url}/${draft.targetId}`, payload)
-      : await selfRequest(token, 'POST', mod.url, payload)
+      : draft.kind === 'transaction' && payload.refType === 'RECEIVABLE'
+        ? await submitReceipt(token, payload)
+        : await selfRequest(token, 'POST', mod.url, payload)
     if (r.json?.code !== 0) {
       // 业务校验没过（缺字段、越权、已结账…）：放开指纹和草稿锁，改好了可以再提交
       await prisma.assistantSubmission.updateMany({ where: { id: sub.id, claimedAt: sub.claimedAt }, data: { status: 'FAILED' } })

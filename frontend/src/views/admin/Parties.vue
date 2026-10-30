@@ -18,12 +18,14 @@
       <el-tab-pane label="客户" name="customers">
         <CrudTable v-if="tab === 'customers'" :api="api.customers" title="客户" entity-name="客户"
                    :columns="customerCols" :form-fields="customerFields" :filters="companyFilter"
-                   :default-form="{ status: 'ACTIVE' }" :can-manage="can('party.manage')" />
+                   :default-form="{ status: 'ACTIVE' }" :can-manage="can('party.manage')"
+                   pin-type="customer" :pin-label="(r) => r.name" />
       </el-tab-pane>
       <el-tab-pane label="供应商" name="suppliers">
         <CrudTable v-if="tab === 'suppliers'" :api="api.suppliers" title="供应商" entity-name="供应商"
                    :columns="supplierCols" :form-fields="supplierFields" :filters="companyFilter"
-                   :default-form="{ status: 'ACTIVE' }" :can-manage="can('party.manage')" />
+                   :default-form="{ status: 'ACTIVE' }" :can-manage="can('party.manage')"
+                   pin-type="supplier" :pin-label="(r) => r.name" />
       </el-tab-pane>
       <el-tab-pane label="项目" name="projects">
         <CrudTable v-if="tab === 'projects'" :api="api.projects" title="项目" entity-name="项目"

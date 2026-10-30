@@ -120,7 +120,7 @@ function pickTxn(body) {
 }
 
 // 写入前的校验：方向、金额（正数、到分）、数据范围、账户必须属于该公司
-async function checkTxn(req, { companyId, accountId, direction, amount }) {
+async function checkTxn(req, { companyId, accountId, direction, amount, invoiceId }) {
   if (direction !== undefined && !['IN', 'OUT'].includes(direction)) return '收支方向只能是 IN 或 OUT'
   if (amount !== undefined && !/^\d+(\.\d{1,2})?$/.test(String(amount).trim())) return '金额格式不对（正数，最多两位小数）'
   if (amount !== undefined && !new Prisma.Decimal(String(amount).trim()).gt(0)) return '金额必须大于 0'
@@ -128,16 +128,20 @@ async function checkTxn(req, { companyId, accountId, direction, amount }) {
   const account = await prisma.account.findFirst({ where: { id: BigInt(accountId), deletedAt: null }, select: { companyId: true } })
   if (!account) return '账户不存在'
   if (String(account.companyId) !== String(companyId)) return '账户不属于该公司'
+  if (invoiceId) {
+    const invoice = await prisma.invoice.findFirst({ where: { id: BigInt(invoiceId), deletedAt: null }, select: { companyId: true } })
+    if (!invoice || String(invoice.companyId) !== String(companyId)) return '发票不属于该公司'
+  }
   return null
 }
 const sendErr = (res, err) => (err.forbidden ? forbidden(res, err.forbidden) : badRequest(res, err))
 
 router.post('/', requirePermission('transaction.manage'), wrap(async (req, res) => {
-  const { companyId, accountId, txnDate, direction, amount } = req.body || {}
+  const { companyId, accountId, txnDate, direction, amount, invoiceId } = req.body || {}
   if (!companyId || !accountId || !txnDate || !direction || !amount) {
     return badRequest(res, '公司、账户、日期、收支方向和金额为必填')
   }
-  const err = await checkTxn(req, { companyId, accountId, direction, amount })
+  const err = await checkTxn(req, { companyId, accountId, direction, amount, invoiceId })
   if (err) return sendErr(res, err)
   const locked = await assertPeriodOpen(companyId, txnDate)
   if (locked) return badRequest(res, locked)

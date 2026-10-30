@@ -235,7 +235,7 @@ export default async function run(t) {
 
   await check('H', '并发 8 个 chat（两个用户交错）→ 只看 A 的用户拿不到 B 的数据', async () => {
     const jobs = Array.from({ length: 8 }, (_, i) => i % 2
-      ? t.api.chat(fx.tokens.financeA, `录一笔应收：金额 ${100 + i}，月底到期`, ctx('/receivables', [pin('company', fx.companyB.id), pin('customer', fx.custB.id)])).then((r) => ['A', i, r])
+      ? t.api.chat(fx.tokens.financeA, `录一笔应收：公司 ${fx.companyB.id}，金额 ${100 + i}，月底到期`, ctx('/receivables')).then((r) => ['A', i, r])
       : t.api.chat(fx.tokens.admin, `录一笔应收：客户 ${fx.custB.id}，金额 ${100 + i}，月底到期`, ctx('/receivables')).then((r) => ['all', i, r]))
     for (const [who, i, r] of await Promise.all(jobs)) {
       const d = assertChatShape(r)

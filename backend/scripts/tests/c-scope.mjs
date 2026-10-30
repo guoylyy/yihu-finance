@@ -13,9 +13,9 @@ export default async function run(t) {
     return d
   }
 
-  await check('C', 'pinned 伪造 id / 非法类型被忽略，合法的按库里数据重查', async () => {
+  await check('C', 'pinned 非法类型 / 非法 id 被忽略，合法的按库里数据重查', async () => {
     const d = await say('admin', '录一笔应收：金额 100，月底到期', ctx('/receivables', [
-      pin('customer', fx.custA.id), pin('customer', '99999999999'), { type: 'user', id: '1' }, { type: 'customer', id: '1 OR 1=1' }, { type: 'customer', id: -1 }, { type: '__proto__', id: '1' }
+      pin('customer', fx.custA.id), { type: 'user', id: '1' }, { type: 'customer', id: '1 OR 1=1' }, { type: 'customer', id: -1 }, { type: '__proto__', id: '1' }
     ]))
     const x = d.drafts[0]
     assert.equal(x.payload.customerId, String(fx.custA.id))
@@ -50,10 +50,10 @@ export default async function run(t) {
     assert.ok(d.drafts[0].warnings.some((w) => w.includes('无权访问')))
   }, W)
 
-  await check('C', '只有 A 权限的账号：读工具（get_invoice 等）拿不到 B 的记录 —— @ 引用 B 的应收被剔除', async () => {
-    const d = await say('financeA', '录一笔应收：金额 100', ctx('/receivables', [pin('receivable', fx.arB.id), pin('customer', fx.custB.id), pin('company', B)]))
-    assertDraftIdsWithin(d.drafts, { companyId: fx.scope.A })
-    assert.equal(d.drafts[0].payload.customerId, undefined)
+  await check('C', '只有 A 权限的账号：@ 引用 B 的应收 / 客户 / 公司 → 9004，整句拒绝，不出草稿', async () => {
+    const r = await t.api.chat(fx.tokens.financeA, '录一笔应收：金额 100', ctx('/receivables', [pin('receivable', fx.arB.id), pin('customer', fx.custB.id), pin('company', B)]))
+    assert.equal(r.json.code, 9004, JSON.stringify(r.json).slice(0, 160))
+    assert.equal(r.json.data?.drafts, undefined)
   }, W)
 
   await check('C', 'live：只有 A 权限的账号点名要 B 公司 / B 的客户 / B 的账户 → 所有草稿里的 id 都在 A 范围内', async () => {

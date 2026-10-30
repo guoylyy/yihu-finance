@@ -7,7 +7,8 @@
 <template>
   <div class="draft" :class="{ done: submitted }">
     <div class="draft-head">
-      <span class="kind">{{ page.label }}草稿</span>
+      <span class="kind-badge" :class="`is-${pageKey}`">{{ page.badge }}</span>
+      <span class="kind">草稿</span>
       <el-tag size="small" effect="plain" :type="draft.mode === 'update' ? 'warning' : 'success'">
         {{ draft.mode === 'update' ? `修改 #${draft.id}` : '新增' }}
       </el-tag>
@@ -32,7 +33,7 @@
       <div v-for="(w, i) in draft.warnings" :key="i">⚠ {{ w }}</div>
     </div>
 
-    <div v-if="actionable" class="draft-actions">
+    <div class="draft-actions">
       <el-button size="small" :disabled="submitted" @click="fillForm">填入表单</el-button>
       <el-tooltip :disabled="canSubmit" :content="submitBlockReason" placement="top">
         <span>
@@ -52,7 +53,7 @@ import { can } from '@/api/permissions'
 import { loadMeta } from '@/composables/useMeta'
 import { ACCOUNT_TYPE_LABEL, BIZ_LABEL, CONFIDENCE, INVOICE_TYPES, labelOf } from '@/constants'
 import { money } from '@/utils/format'
-import { useAssistantStore, DRAFT_PAGES, DRAFT_ROUTES } from '@/stores/assistant'
+import { useAssistantStore, DRAFT_PAGES, draftPageKey } from '@/stores/assistant'
 
 const props = defineProps({ draft: { type: Object, required: true } })
 const store = useAssistantStore()
@@ -96,13 +97,15 @@ const FIELDS = {
   transaction: [
     ['companyId', '公司', 'ref'], ['accountId', '账户', 'ref'], ['txnDate', '交易日期'],
     ['direction', '收支方向', 'enum', (v) => DIRECTION[v]], ['amount', '金额', 'money'], ['counterparty', '对方名称'],
-    ['remark', '摘要'], ['bizType', '业务类型', 'enum', (v) => BIZ_LABEL[v]], ['projectId', '项目', 'ref']
+    ['remark', '摘要'], ['bizType', '业务类型', 'enum', (v) => BIZ_LABEL[v]], ['projectId', '项目', 'ref'],
+    ['invoiceId', '关联发票', 'ref'], ['refId', '冲减应收', 'ref']
   ]
 }
 const API = { account: api.accounts, receivable: api.receivables, invoice: api.invoices, transaction: api.transactions }
 const MANAGE = { account: 'account.manage', receivable: 'receivable.manage', invoice: 'invoice.manage', transaction: 'transaction.manage' }
 
-const page = computed(() => DRAFT_PAGES[props.draft.kind])
+const pageKey = computed(() => draftPageKey(props.draft))
+const page = computed(() => DRAFT_PAGES[pageKey.value])
 const isMissing = (k) => props.draft.missing?.includes(k)
 // 修改模式只列草稿里改到的字段；新增模式列有值的、缺的、待选的
 const rows = computed(() => (FIELDS[props.draft.kind] || [])
@@ -118,13 +121,13 @@ function display(f) {
   return v
 }
 
-// 草稿按钮只在支持录入的四个页面出现
-const actionable = computed(() => DRAFT_ROUTES.includes(route.path))
-const canSubmit = computed(() => !submitted.value && !props.draft.missing?.length && can(MANAGE[props.draft.kind]))
+// 回款同时写流水和应收，两边的 manage 都要有
+const needPerms = computed(() => (pageKey.value === 'receipt' ? ['transaction.manage', 'receivable.manage'] : [MANAGE[props.draft.kind]]))
+const canSubmit = computed(() => !submitted.value && !props.draft.missing?.length && needPerms.value.every((p) => can(p)))
 const submitBlockReason = computed(() => {
   if (submitted.value) return '已提交'
   if (props.draft.missing?.length) return '还有待补充的字段，请先在对话里补充或「填入表单」手工补齐'
-  return `需要「${MANAGE[props.draft.kind]}」权限`
+  return `需要「${needPerms.value.join('、')}」权限`
 })
 
 function choose(key, id) {
@@ -134,6 +137,7 @@ function choose(key, id) {
   props.draft.missing = (props.draft.missing || []).filter((k) => k !== key)
 }
 
+// 草稿类型不是当前页的，先跳到对应页面；抽屉在布局层，切页不关，对话和草稿都留着
 async function fillForm() {
   if (route.path !== page.value.route) await router.push(page.value.route)
   store.requestPrefill(props.draft)
@@ -165,6 +169,7 @@ async function submit() {
     }
     if (['account', 'transaction'].includes(props.draft.kind)) await loadMeta(true)
     store.notifyRefresh(props.draft.kind)
+    if (pageKey.value === 'receipt') store.notifyRefresh('receivable')
   } catch (e) {
     ElMessage.error(e.message)
   } finally {
@@ -177,6 +182,13 @@ async function submit() {
 .draft { border: 1px solid var(--border-strong); border-radius: 8px; background: #fff; margin-top: 8px; overflow: hidden; }
 .draft.done { opacity: 0.75; }
 .draft-head { display: flex; align-items: center; gap: 6px; padding: 7px 10px; background: #fcfbfa; border-bottom: 1px solid var(--border); }
+.draft-head { flex-wrap: wrap; }
+.kind-badge { flex-shrink: 0; padding: 0 7px; border-radius: 4px; font-size: 12px; font-weight: 600; line-height: 20px; color: #fff; background: var(--text-muted); }
+.kind-badge.is-account { background: #57534e; }
+.kind-badge.is-receivable { background: #0f766e; }
+.kind-badge.is-invoice { background: #7c3aed; }
+.kind-badge.is-transaction { background: #2563eb; }
+.kind-badge.is-receipt { background: #15803d; }
 .kind { font-weight: 600; font-size: 13px; margin-right: auto; }
 .done-tag { max-width: 60%; overflow: hidden; text-overflow: ellipsis; }
 .fields { width: 100%; border-collapse: collapse; font-size: 12.5px; }
@@ -191,6 +203,7 @@ async function submit() {
 @media (max-width: 768px) {
   .draft { overflow: visible; }
   .kind { font-size: 14px; }
+  .kind-badge { font-size: 13px; line-height: 22px; }
   .fields, .fields tbody, .fields tr, .fields th, .fields td { display: block; width: auto; }
   .fields { font-size: 14px; }
   .fields tr { padding: 6px 12px; border-bottom: 1px solid var(--border); }
