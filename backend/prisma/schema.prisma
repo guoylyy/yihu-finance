@@ -664,3 +664,57 @@ model ForecastItem {
   @@index([companyId])
   @@map("forecast_items")
 }
+
+// =====================================================
+// 9. 业务编号序列 / 录入助手草稿
+// =====================================================
+
+// 业务编号序列：seq_key = 编号前缀（如 TXN-202610-、AR-2026-），seq_value = 已发出的最大序号
+// 取号在事务里 INSERT … ON DUPLICATE KEY UPDATE 拿行锁，并发不撞号（见 lib/code.js）
+model CodeSequence {
+  seqKey    String   @id @map("seq_key") @db.VarChar(32)
+  seqValue  Int      @default(0) @map("seq_value")
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at")
+
+  @@map("code_sequences")
+}
+
+// 录入助手产出的草稿：chat 时落库，提交状态（submittedAt + 业务 id/编号）持久化，抽屉关掉重开也能拉回来
+model AssistantDraft {
+  id          BigInt    @id @default(autoincrement())
+  userId      BigInt    @map("user_id")
+  kind        String    @db.VarChar(20) // account / receivable / invoice / transaction
+  mode        String    @db.VarChar(10) // create / update
+  targetId    BigInt?   @map("target_id") // 修改模式下要改的记录 id
+  companyId   BigInt?   @map("company_id")
+  payload     Json
+  submittedAt DateTime? @map("submitted_at")
+  resultId    String?   @map("result_id") @db.VarChar(32) // 提交后产生/修改的业务记录 id
+  resultCode  String?   @map("result_code") @db.VarChar(120) // 业务编号（应收/流水 code，发票号，账户名）
+  duplicateOf BigInt?   @map("duplicate_of") // 被判为重复提交时，第一次提交的草稿 id
+  lockedAt    DateTime? @map("locked_at") // 提交进行中的锁：同一张草稿并发提交时，后到的等前一个出结果
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @default(now()) @updatedAt @map("updated_at")
+
+  @@index([userId, createdAt])
+  @@map("assistant_drafts")
+}
+
+// 草稿提交指纹：sha256(类型 + 修改目标 + 规范化 payload + 用户 id)，唯一索引挡住并发重复提交
+// 同指纹 60 秒内再提交 → 返回第一次的结果；超过 60 秒视为新的一笔，原行被接管复用
+model AssistantSubmission {
+  id          BigInt   @id @default(autoincrement())
+  fingerprint String   @unique @db.Char(64)
+  userId      BigInt   @map("user_id")
+  draftId     BigInt   @map("draft_id")
+  kind        String   @db.VarChar(20)
+  status      String   @default("PENDING") @db.VarChar(20) // PENDING 处理中 / DONE 成功 / FAILED 失败（可重试）
+  resultId    String?  @map("result_id") @db.VarChar(32)
+  resultCode  String?  @map("result_code") @db.VarChar(120)
+  claimedAt   DateTime @default(now()) @map("claimed_at") // 本轮提交开始时间，60 秒窗口从这里算
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @default(now()) @updatedAt @map("updated_at")
+
+  @@index([userId])
+  @@map("assistant_submissions")
+}

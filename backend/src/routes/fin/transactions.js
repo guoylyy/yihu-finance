@@ -4,9 +4,9 @@ import multer from 'multer'
 import prisma from '../../lib/prisma.js'
 import { Prisma } from '@prisma/client'
 import { requirePermission, scopeWhere, inScope } from '../../lib/auth.js'
-import { ok, badRequest, notFound, forbidden, wrap } from '../../lib/response.js'
+import { ok, badRequest, notFound, forbidden, wrap, readableError } from '../../lib/response.js'
 import { toDate } from '../../lib/period.js'
-import { nextCode } from '../../lib/code.js'
+import { createWithCode } from '../../lib/code.js'
 import { recalcAccountBalance } from '../../lib/balance.js'
 import { logAudit } from '../../lib/audit.js'
 import { assertPeriodOpen } from '../../lib/close.js'
@@ -143,8 +143,9 @@ router.post('/', requirePermission('transaction.manage'), wrap(async (req, res) 
   if (locked) return badRequest(res, locked)
 
   const data = pickTxn(req.body)
-  data.code = await nextCode('TXN', { date: toDate(txnDate) })
-  const row = await prisma.transaction.create({ data, include: INCLUDE })
+  // 没选业务类型时按收支方向兜底（与导入一致），以前会直接撞 Prisma 必填校验
+  if (!data.bizType) data.bizType = direction === 'IN' ? 'OTHER_IN' : 'OTHER_OUT'
+  const row = await createWithCode('transaction', 'TXN', { date: toDate(txnDate) }, { data, include: INCLUDE })
   await recalcAccountBalance(row.accountId)
   await logAudit(req, { action: 'CREATE', entity: 'transaction', entityId: row.id, summary: `新增流水 ${row.code} ${row.direction} ${row.amount}`, after: row })
   return ok(res, row)
@@ -194,8 +195,25 @@ router.post('/batch', requirePermission('transaction.manage'), wrap(async (req, 
   if (status) data.status = status
   if (!Object.keys(data).length) return badRequest(res, '没有需要更新的字段')
 
+  // 数据范围：选中的流水只要有一笔不存在或不在可见公司内，整批拒绝（不悄悄只改其中一部分）
+  let idList
+  try {
+    idList = [...new Set(ids.map((x) => BigInt(x)))]
+  } catch {
+    return badRequest(res, '流水 id 不合法')
+  }
+  const rows = await prisma.transaction.findMany({
+    where: { id: { in: idList }, deletedAt: null }, select: { id: true, companyId: true }
+  })
+  const visible = rows.filter((r) => inScope(req.user, r.companyId))
+  if (visible.length < idList.length) {
+    const outOfScope = rows.length - visible.length
+    if (outOfScope) return forbidden(res, `选中的流水里有 ${outOfScope} 笔不在您的数据范围内，未做任何修改`)
+    return notFound(res, `选中的流水里有 ${idList.length - rows.length} 笔不存在或已作废，未做任何修改`)
+  }
+
   const result = await prisma.transaction.updateMany({
-    where: { id: { in: ids.map(BigInt) }, deletedAt: null }, data
+    where: { id: { in: idList }, deletedAt: null, AND: [scopeWhere(req.user)] }, data
   })
   await logAudit(req, { action: 'UPDATE', entity: 'transaction', summary: `批量更新 ${result.count} 笔流水`, after: data })
   return ok(res, { count: result.count })
@@ -208,7 +226,7 @@ router.post('/import/preview', requirePermission('transaction.import'), upload.s
   if (!accountId) return badRequest(res, '请选择导入到哪个账户')
 
   const account = await prisma.account.findFirst({ where: { id: BigInt(accountId), deletedAt: null } })
-  if (!account) return notFound(res, '账户不存在')
+  if (!account || !inScope(req.user, account.companyId)) return notFound(res, '账户不存在')
 
   // 表头认不出来时，前端会让用户手工指定列，再带着 mapping 重新解析
   let mapping = null
@@ -324,7 +342,7 @@ router.post('/import/commit', requirePermission('transaction.import'), wrap(asyn
   if (!accountId || !rows.length) return badRequest(res, '没有可导入的数据')
 
   const account = await prisma.account.findFirst({ where: { id: BigInt(accountId), deletedAt: null } })
-  if (!account) return notFound(res, '账户不存在')
+  if (!account || !inScope(req.user, account.companyId)) return notFound(res, '账户不存在')
 
   const categories = await prisma.category.findMany({ where: { deletedAt: null } })
   const catByName = new Map(categories.map((c) => [`${c.kind}:${c.name}`, c.id]))
@@ -346,9 +364,8 @@ router.post('/import/commit', requirePermission('transaction.import'), wrap(asyn
       const locked = await assertPeriodOpen(account.companyId, date)
       if (locked) { skip++; errors.push(`${r.txnDate} ${locked}`); continue }
       const kind = r.direction === 'IN' ? 'IN' : 'OUT'
-      await prisma.transaction.create({
+      await createWithCode('transaction', 'TXN', { date }, {
         data: {
-          code: await nextCode('TXN', { date }),
           companyId: account.companyId,
           accountId: account.id,
           txnDate: date,
@@ -368,7 +385,7 @@ router.post('/import/commit', requirePermission('transaction.import'), wrap(asyn
       success++
     } catch (e) {
       skip++
-      errors.push(`${r.txnDate} ${r.amount}：${e.message}`)
+      errors.push(`${r.txnDate} ${r.amount}：${readableError(e).message}`)
     }
   }
 
@@ -384,7 +401,7 @@ router.post('/import/commit', requirePermission('transaction.import'), wrap(asyn
 
 router.get('/import/batches', requirePermission('transaction.view'), wrap(async (req, res) => {
   const list = await prisma.importBatch.findMany({
-    where: req.query.company_id ? { companyId: BigInt(req.query.company_id) } : {},
+    where: { AND: [scopeWhere(req.user)], ...(req.query.company_id ? { companyId: BigInt(req.query.company_id) } : {}) },
     orderBy: { id: 'desc' }, take: 50
   })
   return ok(res, { list })

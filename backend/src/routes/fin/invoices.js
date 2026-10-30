@@ -4,8 +4,8 @@ import multer from 'multer'
 import prisma from '../../lib/prisma.js'
 import { Prisma } from '@prisma/client'
 import { crudRouter } from '../../lib/crud.js'
-import { requirePermission, scopeWhere } from '../../lib/auth.js'
-import { ok, badRequest, notFound, wrap } from '../../lib/response.js'
+import { requirePermission, scopeWhere, inScope } from '../../lib/auth.js'
+import { ok, badRequest, notFound, forbidden, wrap, readableError } from '../../lib/response.js'
 import { toDate } from '../../lib/period.js'
 import { logAudit } from '../../lib/audit.js'
 import { round2 } from '../../lib/money.js'
@@ -92,6 +92,7 @@ function fillAmounts(data) {
 router.post('/import', requirePermission('invoice.manage'), upload.single('file'), wrap(async (req, res) => {
   const { companyId, type = 'PURCHASE' } = req.body || {}
   if (!companyId) return badRequest(res, '请选择所属公司')
+  if (!inScope(req.user, companyId)) return forbidden(res, '无权在该公司下导入发票')
   if (!req.file) return badRequest(res, '请上传发票清单文件')
 
   const wb = XLSX.read(req.file.buffer, { type: 'buffer', cellDates: true, codepage: 936 })
@@ -130,7 +131,7 @@ router.post('/import', requirePermission('invoice.manage'), upload.single('file'
       })
       success++
     } catch (e) {
-      skipped.push(`${invoiceNo}（${e.message}）`)
+      skipped.push(`${invoiceNo}（${readableError(e).message}）`)
     }
   }
   await logAudit(req, {
@@ -144,11 +145,14 @@ router.post('/import', requirePermission('invoice.manage'), upload.single('file'
 router.post('/:id/link-transaction', requirePermission('invoice.manage'), wrap(async (req, res) => {
   const id = BigInt(req.params.id)
   const { transactionId } = req.body || {}
+  if (!/^[1-9]\d{0,17}$/.test(String(transactionId ?? ''))) return badRequest(res, '请选择要关联的流水')
   const [invoice, txn] = await Promise.all([
     prisma.invoice.findFirst({ where: { id, deletedAt: null } }),
     prisma.transaction.findFirst({ where: { id: BigInt(transactionId), deletedAt: null } })
   ])
-  if (!invoice || !txn) return notFound(res)
+  // 数据范围：发票和流水都必须在可见公司内，范围外的按「不存在」处理（与详情接口同口径）
+  if (!invoice || !inScope(req.user, invoice.companyId)) return notFound(res, '发票不存在或已作废')
+  if (!txn || !inScope(req.user, txn.companyId)) return notFound(res, '流水不存在或已作废')
   await prisma.transaction.update({ where: { id: txn.id }, data: { invoiceId: invoice.id } })
   const row = await prisma.invoice.update({ where: { id }, data: { status: 'BOOKED' }, include: INCLUDE })
   await logAudit(req, { action: 'UPDATE', entity: 'invoice', entityId: id, summary: `发票 ${invoice.invoiceNo} 关联流水 ${txn.code}` })

@@ -179,7 +179,9 @@ const PURGE_ORDER = ['transaction', 'importBatch', 'attachment', 'invoice', 'rec
   'loan', 'forecastItem', 'closePeriod', 'project', 'customer', 'supplier', 'person', 'account']
 export const COUNT_TABLES = ['user', 'auditLog', 'company', 'account', 'person', 'customer', 'supplier', 'project', 'category', 'transaction',
   'importBatch', 'receivable', 'payable', 'payment', 'payroll', 'payrollItem', 'reimbursement', 'invoice', 'loan', 'loanRepayment',
-  'attachment', 'closePeriod', 'forecastItem']
+  'attachment', 'closePeriod', 'forecastItem', 'assistantDraft', 'assistantSubmission']
+// 按用户归属的测试数据（录入助手草稿与提交指纹），跟着测试用户一起删
+const USER_OWNED = ['assistantSubmission', 'assistantDraft']
 
 export async function openDb() {
   const dotenv = await import('dotenv')
@@ -211,6 +213,7 @@ export async function residual(db, { companyIds, userIds, prefix }) {
   out.customerByName = await db.customer.count({ where: { name: { startsWith: prefix } } })
   out.company = await db.company.count({ where: { OR: [{ id: { in: cids } }, { code: { startsWith: prefix } }] } })
   out.user = await db.user.count({ where: { OR: [{ id: { in: uids } }, { username: { startsWith: prefix.toLowerCase() } }] } })
+  for (const m of USER_OWNED) out[m] = await db[m].count({ where: { userId: { in: uids } } })
   out.auditLog = await db.auditLog.count({ where: auditWhere(companyIds, userIds) })
   return Object.fromEntries(Object.entries(out).filter(([, v]) => v > 0))
 }
@@ -244,6 +247,10 @@ export async function purge(db, { companyIds, userIds, keepAudit }) {
     if (r.count) removed.auditLog = r.count
   }
   if (userIds.length) {
+    for (const m of USER_OWNED) {
+      const r = await db[m].deleteMany({ where: { userId: { in: userIds.map(BigInt) } } })
+      if (r.count) removed[m] = r.count
+    }
     const r = await db.user.deleteMany({ where: { id: { in: userIds.map(BigInt) } } })
     if (r.count) removed.user = r.count
   }

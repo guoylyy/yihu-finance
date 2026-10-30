@@ -2,7 +2,7 @@
   <div class="page" v-loading="loading">
     <div class="page-head">
       <div>
-        <div class="page-title">
+        <div class="page-title keep-mobile">
           {{ payroll.company?.code }} · {{ payroll.period }} 工资
           <el-tag size="small" :type="tagOf(PAYROLL_STATUS, payroll.status)">{{ labelOf(PAYROLL_STATUS, payroll.status) }}</el-tag>
         </div>

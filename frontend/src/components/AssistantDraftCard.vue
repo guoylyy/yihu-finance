@@ -1,6 +1,8 @@
 <!--
   录入助手的草稿卡：字段表格 + 缺失高亮 + 候选选择
-  「填入表单」打开对应页面的弹窗预填；「确认提交」直接调该模块现有的创建/更新接口（权限、审计、余额重算照旧）
+  「填入表单」打开对应页面的弹窗预填；「确认提交」调 /assistant/drafts/:id/submit，由服务端代调该模块现有的创建/更新接口
+  （权限、审计、余额重算照旧）并去重：同一张草稿 / 60 秒内同内容再提交，返回第一次的结果（duplicate: true）
+  提交状态记在服务端，抽屉关掉重开、组件重建时按 draftId 拉回来，已提交的不能再点
 -->
 <template>
   <div class="draft" :class="{ done: submitted }">
@@ -9,7 +11,7 @@
       <el-tag size="small" effect="plain" :type="draft.mode === 'update' ? 'warning' : 'success'">
         {{ draft.mode === 'update' ? `修改 #${draft.id}` : '新增' }}
       </el-tag>
-      <el-tag v-if="submitted" size="small" type="success">已提交</el-tag>
+      <el-tag v-if="submitted" size="small" type="success" class="done-tag">{{ doneLabel }}</el-tag>
     </div>
 
     <table class="fields">
@@ -42,7 +44,7 @@
 </template>
 
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, ref, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import api from '@/api'
@@ -57,7 +59,21 @@ const store = useAssistantStore()
 const route = useRoute()
 const router = useRouter()
 const saving = ref(false)
-const submitted = ref(false)
+// 提交结果挂在草稿对象上（store 里那份），组件重建不丢；再以服务端为准
+const submitted = computed(() => !!props.draft.submission?.submitted)
+const doneLabel = computed(() => {
+  const s = props.draft.submission
+  const no = s?.code || (s?.id ? `#${s.id}` : '')
+  return no ? `已提交 · 编号 ${no}` : '已提交'
+})
+
+onMounted(async () => {
+  if (!props.draft.draftId || props.draft.submission?.submitted) return
+  try {
+    const s = await api.assistant.draft(props.draft.draftId)
+    if (s.submitted) props.draft.submission = s
+  } catch { /* 拉不到状态不影响使用，提交时服务端还会再挡一次 */ }
+})
 
 const DIRECTION = { IN: '收入', OUT: '支出' }
 const FIELDS = {
@@ -130,11 +146,23 @@ async function submit() {
   } catch { return }
   saving.value = true
   try {
-    const target = API[props.draft.kind]
-    if (props.draft.mode === 'update') await target.update(props.draft.id, props.draft.payload)
-    else await target.create(props.draft.payload)
-    submitted.value = true
-    ElMessage.success('已提交')
+    if (props.draft.draftId) {
+      const r = await api.assistant.submitDraft(props.draft.draftId, props.draft.payload)
+      props.draft.submission = { ...r, submitted: true }
+      const no = r.code || (r.id ? `#${r.id}` : '')
+      if (r.duplicate) {
+        ElMessage.warning(`这笔刚才已提交过（编号 ${no}），没有重复记账`)
+        return
+      }
+      ElMessage.success(no ? `已提交（编号 ${no}）` : '已提交')
+    } else {
+      // 老版本后端没有 draftId：退回直接调模块接口
+      const target = API[props.draft.kind]
+      if (props.draft.mode === 'update') await target.update(props.draft.id, props.draft.payload)
+      else await target.create(props.draft.payload)
+      props.draft.submission = { submitted: true }
+      ElMessage.success('已提交')
+    }
     if (['account', 'transaction'].includes(props.draft.kind)) await loadMeta(true)
     store.notifyRefresh(props.draft.kind)
   } catch (e) {
@@ -150,6 +178,7 @@ async function submit() {
 .draft.done { opacity: 0.75; }
 .draft-head { display: flex; align-items: center; gap: 6px; padding: 7px 10px; background: #fcfbfa; border-bottom: 1px solid var(--border); }
 .kind { font-weight: 600; font-size: 13px; margin-right: auto; }
+.done-tag { max-width: 60%; overflow: hidden; text-overflow: ellipsis; }
 .fields { width: 100%; border-collapse: collapse; font-size: 12.5px; }
 .fields th { width: 84px; text-align: left; font-weight: 400; color: var(--text-muted); padding: 4px 10px; vertical-align: top; }
 .fields td { padding: 4px 10px 4px 0; word-break: break-all; }

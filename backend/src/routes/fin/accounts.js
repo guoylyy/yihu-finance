@@ -2,10 +2,10 @@
 import express from 'express'
 import prisma from '../../lib/prisma.js'
 import { crudRouter } from '../../lib/crud.js'
-import { requirePermission, maskAccountNo, scopeWhere, can } from '../../lib/auth.js'
+import { requirePermission, maskAccountNo, scopeWhere, inScope, can } from '../../lib/auth.js'
 import { ok, badRequest, notFound, wrap } from '../../lib/response.js'
 import { recalcAccountBalance } from '../../lib/balance.js'
-import { nextCode } from '../../lib/code.js'
+import { withCodes } from '../../lib/code.js'
 import { toDate } from '../../lib/period.js'
 import { logAudit } from '../../lib/audit.js'
 import { Prisma } from '@prisma/client'
@@ -56,7 +56,9 @@ router.post('/transfer', requirePermission('transaction.manage'), wrap(async (re
     prisma.account.findUnique({ where: { id: BigInt(fromAccountId) } }),
     prisma.account.findUnique({ where: { id: BigInt(toAccountId) } })
   ])
-  if (!from || !to) return notFound(res, '账户不存在')
+  // 数据范围：转出、转入两个账户都必须在可见公司内（公司间转账也一样，看不到对方公司就不能往那边转）
+  if (!from || from.deletedAt || !inScope(req.user, from.companyId)) return notFound(res, '转出账户不存在')
+  if (!to || to.deletedAt || !inScope(req.user, to.companyId)) return notFound(res, '转入账户不存在')
   if (from.currency !== to.currency) return badRequest(res, '暂不支持跨币种转账，请分别登记两笔流水')
 
   const date = toDate(txnDate) || new Date()
@@ -64,8 +66,8 @@ router.post('/transfer', requirePermission('transaction.manage'), wrap(async (re
   const isInter = from.companyId !== to.companyId
   const bizType = isInter ? 'INTERCOMPANY' : 'TRANSFER'
 
-  const result = await prisma.$transaction(async (tx) => {
-    const outCode = await nextCode('TXN', { date })
+  // 一次取两个连续编号：转出、转入各一个（以前是转出号 +1 硬算，并发时会和别人的号撞）
+  const result = await withCodes('TXN', { date, count: 2 }, ([outCode, inCode]) => prisma.$transaction(async (tx) => {
     const outTxn = await tx.transaction.create({
       data: {
         code: outCode, companyId: from.companyId, accountId: from.id, txnDate: date,
@@ -76,7 +78,7 @@ router.post('/transfer', requirePermission('transaction.manage'), wrap(async (re
     })
     const inTxn = await tx.transaction.create({
       data: {
-        code: outCode.replace(/(\d+)$/, (n) => String(Number(n) + 1).padStart(n.length, '0')),
+        code: inCode,
         companyId: to.companyId, accountId: to.id, txnDate: date,
         direction: 'IN', amount: amt, currency: to.currency,
         counterparty: from.name, bizType, status: 'RECONCILED',
@@ -86,7 +88,7 @@ router.post('/transfer', requirePermission('transaction.manage'), wrap(async (re
     })
     await tx.transaction.update({ where: { id: outTxn.id }, data: { transferPairId: inTxn.id } })
     return { outTxn, inTxn }
-  })
+  }))
 
   await Promise.all([recalcAccountBalance(from.id), recalcAccountBalance(to.id)])
   await logAudit(req, { action: 'CREATE', entity: 'transfer', entityId: result.outTxn.id, summary: `${from.name} → ${to.name} 转账 ${amount}` })

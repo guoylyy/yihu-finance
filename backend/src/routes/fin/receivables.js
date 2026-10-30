@@ -3,9 +3,9 @@ import express from 'express'
 import prisma from '../../lib/prisma.js'
 import { Prisma } from '@prisma/client'
 import { crudRouter } from '../../lib/crud.js'
-import { requirePermission, scopeWhere } from '../../lib/auth.js'
-import { ok, badRequest, notFound, wrap } from '../../lib/response.js'
-import { nextCode } from '../../lib/code.js'
+import { requirePermission, scopeWhere, inScope } from '../../lib/auth.js'
+import { ok, badRequest, notFound, forbidden, wrap } from '../../lib/response.js'
+import { nextCode, createWithCode } from '../../lib/code.js'
 import { toDate } from '../../lib/period.js'
 import { recalcAccountBalance } from '../../lib/balance.js'
 import { logAudit } from '../../lib/audit.js'
@@ -57,11 +57,14 @@ router.post('/:id/receipt', requirePermission('receivable.manage'), wrap(async (
   const { accountId, amount, receiptDate, remark } = req.body || {}
   if (!accountId || !amount) return badRequest(res, '请填写收款账户和金额')
 
+  // 数据范围：应收和收款账户都要在可见公司内；账户还必须属于应收所在公司（与新增流水同口径，否则流水挂 A 公司、钱进了 B 的账户）
   const ar = await prisma.receivable.findFirst({ where: { id, deletedAt: null } })
-  if (!ar) return notFound(res)
+  if (!ar || !inScope(req.user, ar.companyId)) return notFound(res)
 
   const account = await prisma.account.findFirst({ where: { id: BigInt(accountId), deletedAt: null } })
   if (!account) return notFound(res, '收款账户不存在')
+  if (!inScope(req.user, account.companyId)) return forbidden(res, '无权使用该收款账户')
+  if (String(account.companyId) !== String(ar.companyId)) return badRequest(res, '收款账户不属于该应收所在公司')
 
   const date = toDate(receiptDate) || new Date()
   const locked = await assertPeriodOpen(ar.companyId, date)
@@ -72,9 +75,8 @@ router.post('/:id/receipt', requirePermission('receivable.manage'), wrap(async (
   const status = received.gte(ar.amount) ? 'RECEIVED' : 'PARTIAL'
   const customer = ar.customerId ? await prisma.customer.findUnique({ where: { id: ar.customerId } }) : null
 
-  const txn = await prisma.transaction.create({
+  const txn = await createWithCode('transaction', 'TXN', { date }, {
     data: {
-      code: await nextCode('TXN', { date }),
       companyId: ar.companyId, accountId: account.id, txnDate: date,
       direction: 'IN', amount: amt, currency: account.currency,
       counterparty: customer?.name || ar.title,

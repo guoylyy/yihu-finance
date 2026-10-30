@@ -1,14 +1,16 @@
-// 录入助手：一句话 → 结构化草稿。助手绝不写库，写入由用户在界面确认后走各模块现有的 REST 接口
+// 录入助手：一句话 → 结构化草稿。模型绝不写库；用户在界面「确认提交」后，由 /drafts/:id/submit 代用户调各模块现有的 REST 接口
+// （权限、数据范围、审计、余额重算照旧），并在那里做重复提交去重（见 lib/assistant-submit.js）
 import express from 'express'
 import dayjs from 'dayjs'
 import prisma from '../../lib/prisma.js'
 import { requirePermission, scopeWhere, inScope, maskAccountNo } from '../../lib/auth.js'
-import { ok, badRequest, wrap } from '../../lib/response.js'
+import { ok, badRequest, notFound, wrap } from '../../lib/response.js'
 import { logAudit } from '../../lib/audit.js'
 import { callSelf } from '../../lib/platform.js'
 import { fmtDate } from '../../lib/period.js'
 import { buildDraft, fieldLabels, DRAFT_TOOLS, DRAFT_KINDS } from '../../lib/assistant-drafts.js'
 import { stubEnabled, stubLLM, callPlatformLLM, platformConfigured, LlmError } from '../../lib/assistant-llm.js'
+import { saveDrafts, getDraft, draftView, submitDraft } from '../../lib/assistant-submit.js'
 
 const router = express.Router()
 
@@ -258,8 +260,38 @@ router.post('/chat', requirePermission('finance.view'), wrap(async (req, res) =>
   }
   if (!upstreamError) unavailable = null
 
+  // 草稿落库拿 draftId：提交状态持久化、重复提交去重都按它来
+  await saveDrafts(drafts, req.user)
   await audit(upstreamError ? { error: true } : {})
   return ok(res, { available: true, stub, reply, drafts, warnings })
+}))
+
+// ---------- 草稿：查状态 / 确认提交 ----------
+// 抽屉重开时按 id 批量拉回提交状态：GET /drafts?ids=1,2,3（只返回自己的草稿）
+router.get('/drafts', requirePermission('finance.view'), wrap(async (req, res) => {
+  const ids = String(req.query.ids || '').split(',').map((x) => x.trim()).filter((x) => /^[1-9]\d{0,17}$/.test(x)).slice(0, 100)
+  if (!ids.length) return ok(res, { list: [] })
+  const rows = await prisma.assistantDraft.findMany({ where: { id: { in: ids.map(BigInt) }, userId: BigInt(req.user.id) } })
+  return ok(res, { list: rows.map(draftView) })
+}))
+
+router.get('/drafts/:id', requirePermission('finance.view'), wrap(async (req, res) => {
+  const d = await getDraft(req.params.id, req.user)
+  if (!d) return notFound(res, '草稿不存在或已过期')
+  return ok(res, draftView(d))
+}))
+
+// body: { payload? } —— 用户在草稿卡上改过（选了候选）就带上；不带用落库时的 payload。类型 / 修改目标只认落库的
+router.post('/drafts/:id/submit', requirePermission('finance.view'), wrap(async (req, res) => {
+  const r = await submitDraft({ id: req.params.id, user: req.user, token: req.headers.authorization.slice(7), payload: req.body?.payload })
+  if (r.json) return res.status(r.status || 200).json(r.json)
+  const d = r.data
+  await logAudit(req, {
+    action: 'assistant.submit', entity: 'assistant', entityId: d.draftId,
+    summary: `录入助手提交｜${d.kind}${d.mode === 'update' ? ` 修改 #${d.targetId}` : ''}｜${d.code || d.id || '-'}${d.duplicate ? '｜重复提交，返回第一次结果' : ''}`,
+    after: { draftId: d.draftId, kind: d.kind, mode: d.mode, resultId: d.id, duplicate: d.duplicate, originalDraftId: d.originalDraftId }
+  })
+  return ok(res, d)
 }))
 
 export default router

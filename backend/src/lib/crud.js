@@ -7,6 +7,7 @@ import { ok, badRequest, notFound, forbidden, wrap } from './response.js'
 import { requirePermission, scopeWhere, inScope } from './auth.js'
 import { logAudit } from './audit.js'
 import { toDate } from './period.js'
+import { isCodeConflict } from './code.js'
 
 /**
  * @param {object} cfg
@@ -108,14 +109,25 @@ export function crudRouter(cfg) {
     const missing = required.filter((k) => req.body[k] === undefined || req.body[k] === '' || req.body[k] === null)
     if (missing.length) return badRequest(res, `缺少必填字段：${missing.join('、')}`)
 
-    let data = pickData(req.body)
-    if (!visible(data, req)) return forbidden(res, '无权在该公司下新增记录')
-    if (hooks.beforeCreate) {
-      const r = await hooks.beforeCreate(data, req)
-      if (r?.error) return badRequest(res, r.error)
-      data = r?.data || data
+    const picked = pickData(req.body)
+    if (!visible(picked, req)) return forbidden(res, '无权在该公司下新增记录')
+    // beforeCreate 里会取业务编号；万一撞号，重新跑一遍 hook 换个号再写，最多重试 3 次
+    let row
+    for (let attempt = 0; ; attempt++) {
+      let data = { ...picked }
+      if (hooks.beforeCreate) {
+        const r = await hooks.beforeCreate(data, req)
+        if (r?.error) return badRequest(res, r.error)
+        data = r?.data || data
+      }
+      try {
+        row = await db().create({ data, include })
+        break
+      } catch (e) {
+        if (!isCodeConflict(e) || attempt >= 3) throw e
+        await new Promise((r) => setTimeout(r, 30 * 2 ** attempt))
+      }
     }
-    const row = await db().create({ data, include })
     await logAudit(req, { action: 'CREATE', entity, entityId: row.id, summary: `新增${entity}`, after: row })
     if (hooks.afterWrite) await hooks.afterWrite(row, req, 'CREATE')
     return ok(res, row)

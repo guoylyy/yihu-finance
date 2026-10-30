@@ -59,9 +59,8 @@ router.get('/:id', requirePermission('payroll.view'), wrap(async (req, res) => {
 router.post('/', requirePermission('payroll.manage'), wrap(async (req, res) => {
   const { companyId, period, title, payDate, remark } = req.body || {}
   if (!companyId || !period) return badRequest(res, '请选择公司和工资所属月份')
-  const row = await prisma.payroll.create({
+  const row = await createWithCode('payroll', 'PR', { date: new Date(period + '-01') }, {
     data: {
-      code: await nextCode('PR', { date: new Date(period + '-01') }),
       companyId: BigInt(companyId), period, title: title || `${period} 工资`,
       payDate: toDate(payDate), remark
     },
@@ -260,9 +259,8 @@ router.post('/:id/generate-payments', requirePermission('payroll.manage'), wrap(
   if (mode === 'PERSON') {
     // 一人一单，便于逐笔审批与对账
     for (const item of payroll.items) {
-      created.push(await prisma.payment.create({
+      created.push(await createWithCode('payment', 'PAY', { date: new Date() }, {
         data: {
-          code: await nextCode('PAY', { date: new Date() }),
           companyId: payroll.companyId, accountId: accountId ? BigInt(accountId) : null,
           payType: 'SALARY', payeeName: item.name, payeeAccountNo: item.bankAccount,
           payeeBankName: item.bankName, amount: item.net,
@@ -277,9 +275,8 @@ router.post('/:id/generate-payments', requirePermission('payroll.manage'), wrap(
     const batches = splitByLimit(rows)
     for (let i = 0; i < batches.length; i++) {
       const total = batches[i].reduce((s, r) => s + Number(r.amount), 0)
-      created.push(await prisma.payment.create({
+      created.push(await createWithCode('payment', 'PAY', { date: new Date() }, {
         data: {
-          code: await nextCode('PAY', { date: new Date() }),
           companyId: payroll.companyId, accountId: accountId ? BigInt(accountId) : null,
           payType: 'SALARY',
           payeeName: `${payroll.period} 工资代发第 ${i + 1} 批（${batches[i].length} 人）`,

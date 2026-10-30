@@ -131,6 +131,8 @@
   .page-head > .el-select, .page-head > .el-input { width: 100% !important; }
   .page-head > .el-button { align-self: flex-start; margin: 0; }
   .page-title { font-size: 18px; }
+  /* 顶栏已显示页面标题，页内同名标题隐藏，只保留一处；页内标题带动态信息的（如工资批次明细）加 keep-mobile 保留 */
+  .page-title:not(.keep-mobile) { display: none; }
   .page-sub { font-size: 13px; line-height: 1.6; }
 
   /* 统计卡单列堆叠：标签左、数值右，省高度 */

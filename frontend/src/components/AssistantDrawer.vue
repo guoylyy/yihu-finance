@@ -52,7 +52,7 @@
 
     <div class="a-input">
       <el-input v-model="input" type="textarea" :autosize="{ minRows: 2, maxRows: 6 }" resize="none"
-                placeholder="Enter 发送，Shift+Enter 换行" :disabled="sending" @keydown="onKeydown" />
+                :placeholder="inputHint" :disabled="sending" @keydown="onKeydown" />
       <el-button type="primary" size="small" :loading="sending" :disabled="!input.trim()" @click="send">发送</el-button>
     </div>
   </aside>
@@ -95,7 +95,11 @@ const EXAMPLES = {
 const draftKind = computed(() => Object.entries(DRAFT_PAGES).find(([, p]) => p.route === route.path)?.[0])
 const draftPage = computed(() => !!draftKind.value)
 
+// 手机没有 Shift 键：软键盘回车只换行，点「发送」按钮发送
+const inputHint = computed(() => (isMobile.value ? '点「发送」按钮发送，回车换行' : 'Enter 发送，Shift+Enter 换行'))
+
 function onKeydown(e) {
+  if (isMobile.value) return
   // 输入法组字中的 Enter 不算发送
   if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
     e.preventDefault()

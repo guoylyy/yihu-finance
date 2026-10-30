@@ -2,7 +2,7 @@
 // 付款管理的「标记已付款」和应付台账的「快速付款」共用这里，避免两处逻辑走偏
 import prisma from './prisma.js'
 import { Prisma } from '@prisma/client'
-import { nextCode } from './code.js'
+import { createWithCode } from './code.js'
 import { toDate } from './period.js'
 import { recalcAccountBalance } from './balance.js'
 import { assertPeriodOpen } from './close.js'
@@ -29,9 +29,8 @@ export async function executePayment({ payment, accountId, paidDate, remark, req
   const locked = await assertPeriodOpen(payment.companyId, date)
   if (locked) return { error: locked }
 
-  const txn = await prisma.transaction.create({
+  const txn = await createWithCode('transaction', 'TXN', { date }, {
     data: {
-      code: await nextCode('TXN', { date }),
       companyId: payment.companyId, accountId: account.id, txnDate: date,
       direction: 'OUT', amount: payment.amount, currency: account.currency,
       counterparty: payment.payeeName, counterpartyAccount: payment.payeeAccountNo,

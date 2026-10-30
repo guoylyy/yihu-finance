@@ -66,9 +66,8 @@ router.post('/:id/repay', requirePermission('loan.manage'), wrap(async (req, res
     if (!account) return notFound(res, '账户不存在')
     // 公司借出的钱收回 = 收入；公司借入的钱归还 = 支出
     const direction = ['COMPANY_TO_PERSON', 'COMPANY_TO_COMPANY', 'ADVANCE'].includes(loan.direction) ? 'IN' : 'OUT'
-    txn = await prisma.transaction.create({
+    txn = await createWithCode('transaction', 'TXN', { date }, {
       data: {
-        code: await nextCode('TXN', { date }),
         companyId: loan.companyId, accountId: account.id, txnDate: date,
         direction, amount: new Prisma.Decimal(amount), currency: account.currency,
         counterparty: loan.counterpartyName, bizType: 'REPAY',

@@ -83,9 +83,8 @@ router.post('/generate-payments', requirePermission('reimburse.approve'), wrap(a
   for (const rows of groups.values()) {
     const first = rows[0]
     const total = rows.reduce((s, r) => s + Number(r.amount), 0)
-    const payment = await prisma.payment.create({
+    const payment = await createWithCode('payment', 'PAY', {}, {
       data: {
-        code: await nextCode('PAY'),
         companyId: first.companyId,
         accountId: accountId ? BigInt(accountId) : null,
         payType: 'REIMBURSE',

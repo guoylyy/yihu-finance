@@ -1,8 +1,8 @@
 // AI 助手可用的受控只读接口（需求 §4：AI 可读数据、可生成摘要，但没有付款权限）
 import express from 'express'
 import prisma from '../../lib/prisma.js'
-import { requirePermission, scopeWhere } from '../../lib/auth.js'
-import { ok, badRequest, wrap } from '../../lib/response.js'
+import { requirePermission, scopeWhere, inScope } from '../../lib/auth.js'
+import { ok, badRequest, notFound, wrap } from '../../lib/response.js'
 import { buildSummaryMd, findDuplicateInvoices } from '../../lib/close.js'
 import { nowPeriod, periodRange } from '../../lib/period.js'
 import { round2 } from '../../lib/money.js'
@@ -13,6 +13,7 @@ const router = express.Router()
 router.get('/monthly-report', requirePermission('analytics.view'), wrap(async (req, res) => {
   const { company_id, period = nowPeriod() } = req.query
   if (!company_id) return badRequest(res, '请选择公司')
+  if (!inScope(req.user, company_id)) return notFound(res, '公司不存在或不在您的数据范围内')
   return ok(res, { markdown: await buildSummaryMd(company_id, period) })
 }))
 
@@ -55,7 +56,11 @@ router.get('/anomalies', requirePermission('analytics.view'), wrap(async (req, r
         where: { deletedAt: null, ...scope, direction: 'OUT', invoiceId: null, txnDate: { gte: start, lte: end }, amount: { gte: 10000 } },
         select: { id: true, code: true, amount: true, counterparty: true, txnDate: true }, take: 50
       }),
-      prisma.company.findMany({ where: { deletedAt: null, status: 'ACTIVE', ...scopeWhere(req.user, 'id') }, select: { id: true, code: true } })
+      // 重复发票按公司逐家查：同样要与数据范围、指定公司取交集
+      prisma.company.findMany({
+        where: { deletedAt: null, status: 'ACTIVE', AND: [scopeWhere(req.user, 'id'), req.query.company_id ? { id: BigInt(req.query.company_id) } : {}] },
+        select: { id: true, code: true }
+      })
     ])
 
   if (missingAccountItems.length) {

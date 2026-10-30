@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "mobile:audit": "node scripts/mobile-audit.mjs audit"
   },
   "dependencies": {
     "@element-plus/icons-vue": "^2.3.2",

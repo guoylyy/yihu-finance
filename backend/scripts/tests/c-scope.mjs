@@ -1,5 +1,6 @@
-// C. 数据范围与越权：伪造引用、别家公司的客户、只有 A 权限的人要 B 公司的草稿；以及「确认提交」走的 REST 接口本身
-import { assert, ctx, pin, assertChatShape, assertDraftIdsWithin } from './lib.mjs'
+// C. 数据范围与越权：伪造引用、别家公司的客户、只有 A 权限的人要 B 公司的草稿；以及「确认提交」走的 REST 接口本身；
+//    转账 / 登记回款 / 关联发票 / 批量改流水 / 资金预测 / 异常清单 / 经营分析 对受限账号（只能看 A）的范围校验
+import { assert, ctx, pin, assertChatShape, assertDraftIdsWithin, cents } from './lib.mjs'
 
 export default async function run(t) {
   const { check, fx } = t
@@ -119,4 +120,86 @@ export default async function run(t) {
       assert.match(r.json.message, re)
     }
   }, { needs: ['write'] })
+
+  // ---------- 受限账号（financeA 只能看 A）：业务动作接口 ----------
+  const R = { needs: ['write'] }
+  const txnIn = async (company, account, extra = {}) => t.api.data('POST', '/api/fin/transactions', fx.tokens.admin,
+    { companyId: company, accountId: String(account), txnDate: '2026-10-28', direction: 'OUT', amount: '3.00', counterparty: `${fx.prefix} 范围测试`, ...extra })
+  const balance = async (acc) => cents((await t.api.data('GET', `/api/fin/accounts/${acc}`, fx.tokens.admin)).balance)
+
+  await check('C', '受限账号：转账转出或转入 B 公司账户 → 9004 不存在，两边余额不变', async () => {
+    const [a0, b0] = [await balance(fx.accA.id), await balance(fx.accB.id)]
+    for (const [from, to] of [[fx.accA.id, fx.accB.id], [fx.accB.id, fx.accA.id]]) {
+      const r = await t.api.http('POST', '/api/fin/accounts/transfer', fx.tokens.financeA, { fromAccountId: String(from), toAccountId: String(to), amount: '1.00', txnDate: '2026-10-28' })
+      assert.equal(r.json.code, 9004, `${from}→${to} 应被拒，实际 ${JSON.stringify(r.json).slice(0, 160)}`)
+    }
+    assert.equal(await balance(fx.accA.id), a0)
+    assert.equal(await balance(fx.accB.id), b0)
+  }, R)
+
+  await check('C', '受限账号：给 B 公司的应收登记回款 → 9004；自己的应收用 B 的账户收款 → 403', async () => {
+    const r1 = await t.api.http('POST', `/api/fin/receivables/${fx.arB.id}/receipt`, fx.tokens.financeA, { accountId: String(fx.accA.id), amount: '1.00', receiptDate: '2026-10-28' })
+    assert.equal(r1.json.code, 9004, JSON.stringify(r1.json).slice(0, 160))
+    const arA = await t.api.data('POST', '/api/fin/receivables', fx.tokens.financeA, { companyId: A, title: `${fx.prefix} 回款范围测试`, amount: '10.00' })
+    const r2 = await t.api.http('POST', `/api/fin/receivables/${arA.id}/receipt`, fx.tokens.financeA, { accountId: String(fx.accB.id), amount: '1.00', receiptDate: '2026-10-28' })
+    assert.equal(r2.status, 403, JSON.stringify(r2.json).slice(0, 160))
+    const ar = await t.api.data('GET', `/api/fin/receivables/${fx.arB.id}`, fx.tokens.admin)
+    assert.equal(cents(ar.receivedAmount), 0n, 'B 的应收不能被改动')
+    // 管理员也不能把回款记到别家公司的账户上（流水挂 A、钱进 B 的账户会让两边余额都错）
+    const r3 = await t.api.http('POST', `/api/fin/receivables/${arA.id}/receipt`, fx.tokens.admin, { accountId: String(fx.accB.id), amount: '1.00', receiptDate: '2026-10-28' })
+    assert.equal(r3.json.code, 9002)
+    assert.match(r3.json.message, /不属于/)
+  }, R)
+
+  await check('C', '受限账号：发票关联 B 公司的流水 / B 公司的发票关联流水 → 9004，流水未被挂上发票', async () => {
+    const tB = await txnIn(B, fx.accB.id)
+    const tA = await txnIn(A, fx.accA.id)
+    const r1 = await t.api.http('POST', `/api/fin/invoices/${fx.invA.id}/link-transaction`, fx.tokens.financeA, { transactionId: String(tB.id) })
+    assert.equal(r1.json.code, 9004, JSON.stringify(r1.json).slice(0, 160))
+    const r2 = await t.api.http('POST', `/api/fin/invoices/${fx.invB.id}/link-transaction`, fx.tokens.financeA, { transactionId: String(tA.id) })
+    assert.equal(r2.json.code, 9004, JSON.stringify(r2.json).slice(0, 160))
+    for (const id of [tA.id, tB.id]) assert.equal((await t.api.data('GET', `/api/fin/transactions/${id}`, fx.tokens.admin)).invoiceId, null)
+    // 自己范围内的照常
+    assert.equal((await t.api.http('POST', `/api/fin/invoices/${fx.invA.id}/link-transaction`, fx.tokens.financeA, { transactionId: String(tA.id) })).json.code, 0)
+  }, R)
+
+  await check('C', '受限账号：批量改流水夹带一笔 B 公司的 → 403，整批都不改', async () => {
+    const tA = await txnIn(A, fx.accA.id)
+    const tB = await txnIn(B, fx.accB.id)
+    const r = await t.api.http('POST', '/api/fin/transactions/batch', fx.tokens.financeA, { ids: [String(tA.id), String(tB.id)], status: 'ABNORMAL' })
+    assert.equal(r.status, 403, JSON.stringify(r.json).slice(0, 160))
+    for (const id of [tA.id, tB.id]) assert.equal((await t.api.data('GET', `/api/fin/transactions/${id}`, fx.tokens.admin)).status, 'UNRECONCILED')
+    const only = await t.api.data('POST', '/api/fin/transactions/batch', fx.tokens.financeA, { ids: [String(tA.id)], status: 'RECONCILED' })
+    assert.equal(only.count, 1)
+  }, R)
+
+  // ---------- 受限账号：只读汇总接口（以前只用 admin 冒烟过）----------
+  await check('C', '受限账号：资金预测 company_id=B → 可用资金 0、无 B 的事件（admin 同参数能看到 B）', async () => {
+    const adm = await t.api.data('GET', `/api/fin/forecast?company_id=${B}`, fx.tokens.admin)
+    assert.ok(adm.available > 0 || adm.events.length > 0, '对照组：admin 应能看到 B 的资金或事件，否则本断言无意义')
+    const r = await t.api.data('GET', `/api/fin/forecast?company_id=${B}`, fx.tokens.financeA)
+    assert.equal(r.available, 0)
+    assert.equal(r.events.length, 0, JSON.stringify(r.events.slice(0, 2)))
+  }, R)
+
+  await check('C', '受限账号：异常清单 company_id=B → 不出现 B 的待核对流水 / 逾期应收（admin 同参数能看到）', async () => {
+    await txnIn(B, fx.accB.id, { counterparty: `${fx.prefix} 异常清单范围` })
+    const adm = await t.api.data('GET', `/api/fin/ai/anomalies?company_id=${B}`, fx.tokens.admin)
+    assert.ok(adm.anomalies.some((a) => a.key === 'unreconciled'), '对照组：admin 应能看到 B 的待核对流水')
+    const r = await t.api.data('GET', `/api/fin/ai/anomalies?company_id=${B}`, fx.tokens.financeA)
+    assert.equal(r.total, 0, JSON.stringify(r.anomalies.map((a) => `${a.key}:${a.count}`)))
+    const rep = await t.api.http('GET', `/api/fin/ai/monthly-report?company_id=${B}`, fx.tokens.financeA)
+    assert.equal(rep.json.code, 9004, `月报指定 B 应被拒，实际 ${JSON.stringify(rep.json).slice(0, 120)}`)
+  }, R)
+
+  await check('C', '受限账号：经营分析 company_id=B → 趋势 / 公司 / 对手方都查不到 B（admin 同参数能看到）', async () => {
+    const adm = await t.api.data('GET', `/api/fin/analytics/by-company?company_id=${B}&months=3`, fx.tokens.admin)
+    assert.ok(adm.list.some((x) => x.code === fx.companyB.code), '对照组：admin 应能看到 B')
+    const byCompany = await t.api.data('GET', `/api/fin/analytics/by-company?company_id=${B}&months=3`, fx.tokens.financeA)
+    assert.equal(byCompany.list.length, 0, JSON.stringify(byCompany.list))
+    const trend = await t.api.data('GET', `/api/fin/analytics/trend?company_id=${B}&months=3`, fx.tokens.financeA)
+    assert.ok(trend.list.every((x) => x.income === 0 && x.expense === 0), JSON.stringify(trend.list))
+    const top = await t.api.data('GET', `/api/fin/analytics/top-counterparty?company_id=${B}&months=3`, fx.tokens.financeA)
+    assert.equal(top.list.length, 0)
+  }, R)
 }

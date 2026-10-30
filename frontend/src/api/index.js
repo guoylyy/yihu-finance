@@ -190,10 +190,13 @@ export const api = {
     monthlyReport: (p) => get(`${B}/ai/monthly-report`, p),
     anomalies: (p) => get(`${B}/ai/anomalies`, p)
   },
-  // 录入助手：只返回草稿，写入仍走上面各模块的 create / update
+  // 录入助手：chat 只返回草稿；「确认提交」走 submitDraft，由服务端代调各模块的 create / update 并去重
   assistant: {
     status: () => get(`${B}/assistant/status`),
-    chat: (b) => request(`${B}/assistant/chat`, { method: 'POST', body: JSON.stringify(b || {}), timeout: 65000 })
+    chat: (b) => request(`${B}/assistant/chat`, { method: 'POST', body: JSON.stringify(b || {}), timeout: 65000 }),
+    draft: (id) => get(`${B}/assistant/drafts/${id}`),
+    drafts: (ids) => get(`${B}/assistant/drafts`, { ids: ids.join(',') }),
+    submitDraft: (id, payload) => post(`${B}/assistant/drafts/${id}/submit`, { payload })
   }
 }
 

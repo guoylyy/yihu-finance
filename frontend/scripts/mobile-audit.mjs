@@ -1,5 +1,6 @@
 // 移动端验收脚本（playwright）
-//   node scripts/mobile-audit.mjs audit                 375×667 下逐路由断言无横向滚动，列出超宽元素
+//   node scripts/mobile-audit.mjs audit                 375×667 下逐路由断言无横向滚动（列出超宽元素）、页面标题只出现一次；
+//                                                       助手输入框提示语随视口切换（375 不提 Shift，1280 保持 Enter / Shift+Enter）
 //   node scripts/mobile-audit.mjs shots [--widths 375,768,1440] [--out screenshots/mobile]
 // 环境变量：APP_URL（默认 http://localhost:5173）、FIN_USER / FIN_PASS（默认 admin / admin123）
 import { chromium } from 'playwright'
@@ -30,7 +31,7 @@ async function login(browser) {
   await page.waitForURL(/dashboard/)
   // 第一张工资单的 id，用于 payrolls/:id
   const token = await page.evaluate(() => Object.entries(localStorage).find(([k]) => /token/i.test(k))?.[1])
-  const res = await page.request.get(`${APP}/api/payrolls?page_size=1`, { headers: { Authorization: `Bearer ${token}` } })
+  const res = await page.request.get(`${APP}/api/fin/payrolls?page_size=1`, { headers: { Authorization: `Bearer ${token}` } })
   const body = await res.json().catch(() => ({}))
   const payrollId = body?.data?.list?.[0]?.id
   const state = await ctx.storageState()
@@ -83,6 +84,16 @@ const FIND_OVERFLOW = (vw) => {
   return { scrollWidth: document.body.scrollWidth, docWidth: document.documentElement.scrollWidth, vw, bad: list }
 }
 
+// 手机端标题只保留一处：顶栏标题 + 页内同名 .page-title 只能有一个可见
+const TITLE_ONCE = () => {
+  const visible = (el) => { const cs = getComputedStyle(el); const r = el.getBoundingClientRect(); return cs.display !== 'none' && cs.visibility !== 'hidden' && r.width > 0 && r.height > 0 }
+  const top = document.querySelector('.topbar .title')
+  const title = top?.textContent.trim()
+  if (!title) return { title: null, count: 0 }
+  const count = [...document.querySelectorAll('.topbar .title, .page-title')].filter((el) => visible(el) && el.textContent.trim() === title).length
+  return { title, count }
+}
+
 // 内容在 .main 里滚动，整页截图前临时放开，截到完整长度（只影响截图，不影响断言）
 async function unlockScroll(page) {
   await page.addStyleTag({ content: '.layout,.main-col{height:auto!important}.main{overflow:visible!important}' })
@@ -125,6 +136,12 @@ async function audit() {
   for (const route of ROUTES) {
     await open(page, route, payrollId)
     await check(route)
+    const t = await page.evaluate(TITLE_ONCE)
+    if (t.count !== 1) {
+      const row = rows[rows.length - 1]
+      row.pass = false
+      row.bad.push(t.title ? `标题「${t.title}」出现 ${t.count} 次（应只出现 1 次）` : '顶栏标题缺失')
+    }
   }
   // 交互态：导航抽屉、新增弹窗、筛选 sheet、助手
   await open(page, 'receivables', payrollId)
@@ -135,6 +152,7 @@ async function audit() {
   await page.locator('.m-filter-btn').first().click().catch(() => {}); await page.waitForTimeout(400); await check('[sheet] 筛选', '.m-sheet')
   await page.keyboard.press('Escape'); await page.waitForTimeout(300)
   await openAssistant(page); await check('[助手] 展开', '.assistant-pane.is-sheet')
+  rows.push(await hintRow(page, 375))
   // 助手里发一句，拿到草稿卡（STUB 模型），检查草稿卡形态
   await page.locator('.a-input textarea').fill('录一笔应收：客户 12，金额 128000，月底到期')
   await page.locator('.a-input .el-button--primary').click()
@@ -148,6 +166,14 @@ async function audit() {
     await page.keyboard.press('Escape'); await page.waitForTimeout(300)
   }
 
+  // 桌面对照：提示语保持 Enter / Shift+Enter
+  const desk = await browser.newContext({ storageState: state, viewport: { width: 1280, height: 800 } })
+  const dp = await desk.newPage()
+  await dp.goto(`${APP}/receivables`); await settle(dp)
+  await openAssistant(dp)
+  rows.push(await hintRow(dp, 1280))
+  await desk.close()
+
   await browser.close()
   console.log('\n| 页面 | 375 通过 | body.scrollWidth | 违规元素 |')
   console.log('|---|---|---|---|')
@@ -155,6 +181,14 @@ async function audit() {
   const failed = rows.filter((r) => !r.pass).length
   console.log(`\n合计 ${rows.length} 项，通过 ${rows.length - failed}，失败 ${failed}`)
   process.exit(failed ? 1 : 0)
+}
+
+// 助手输入框提示语：手机没有 Shift 键，不能写「Shift+Enter」
+async function hintRow(page, width) {
+  const ph = await page.locator('.a-input textarea').first().getAttribute('placeholder').catch(() => null)
+  const mobile = width <= 768
+  const pass = !!ph && (mobile ? !/shift/i.test(ph) && /发送/.test(ph) : /Shift\+Enter/.test(ph))
+  return { name: `[助手] 输入框提示语 ${width}`, pass, scrollWidth: '—', bad: pass ? [] : [`placeholder=「${ph}」${mobile ? '（手机端不应提 Shift）' : '（桌面应为 Enter 发送，Shift+Enter 换行）'}`] }
 }
 
 async function clickAdd(page) {

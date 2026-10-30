@@ -83,9 +83,8 @@ router.post('/:id/quick-pay', requirePermission('payable.manage'), wrap(async (r
     if (!accountId) return badRequest(res, '请选择付款账户')
   }
 
-  const payment = await prisma.payment.create({
+  const payment = await createWithCode('payment', 'PAY', { date: toDate(paidDate) || new Date() }, {
     data: {
-      code: await nextCode('PAY', { date: toDate(paidDate) || new Date() }),
       companyId: payable.companyId,
       accountId: accountId ? BigInt(accountId) : null,
       payableId: payable.id,
