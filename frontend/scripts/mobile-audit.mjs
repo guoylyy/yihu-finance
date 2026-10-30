@@ -185,6 +185,8 @@ async function audit() {
   rows.push(await hintRow(dp, 1280))
   await desk.close()
 
+  rows.push(...await versionRows(browser, state))
+
   // 平板 / 桌面：逐路由 + 助手跨类型草稿卡
   for (const w of [768, 1440]) {
     const c = await browser.newContext({ storageState: state, viewport: { width: w, height: HEIGHT[w] } })
@@ -213,6 +215,49 @@ async function audit() {
   console.log(`\n合计 ${rows.length} 项，通过 ${rows.length - failed}，失败 ${failed}`)
   process.exit(failed ? 1 : 0)
 }
+
+// 版本号：桌面在顶栏，手机不进顶栏、在头像下拉里；接口给不出版本时两处都不渲染
+async function versionRows(browser, state) {
+  const rows = []
+  const row = (name, pass, detail) => rows.push({ name, pass, scrollWidth: '—', bad: pass ? [] : [detail] })
+  const health = await (await fetch(`${APP}/api/health`)).json()
+  const label = `v${health?.data?.version}`
+  const VER = /\bv\d|vundefined/
+  const open375 = async (blank) => {
+    const c = await browser.newContext({ storageState: state, viewport: { width: 375, height: 667 }, isMobile: true, hasTouch: true })
+    const p = await c.newPage()
+    if (blank) await blankHealth(p)
+    await p.goto(`${APP}/dashboard`); await settle(p)
+    const topbar = await p.locator('.topbar').innerText()
+    await p.locator('.topbar .user').click(); await p.waitForTimeout(400)
+    const first = await p.locator('.el-dropdown-menu:visible .el-dropdown-menu__item').first().innerText()
+    const menu = await p.locator('.el-dropdown-menu:visible').innerText()
+    await c.close()
+    return { topbar, first, menu }
+  }
+  const open1440 = async (blank) => {
+    const c = await browser.newContext({ storageState: state, viewport: { width: 1440, height: 900 } })
+    const p = await c.newPage()
+    if (blank) await blankHealth(p)
+    await p.goto(`${APP}/dashboard`); await settle(p)
+    const topbar = await p.locator('.topbar').innerText()
+    await c.close()
+    return topbar
+  }
+
+  const d = await open1440(false)
+  row('[版本] 1440 顶栏显示', /^v\d/.test(label) && d.includes(label), `顶栏未见 ${label}：${d}`)
+  const m = await open375(false)
+  row('[版本] 375 顶栏不显示', !VER.test(m.topbar), `顶栏出现版本：${m.topbar}`)
+  row('[版本] 375 头像下拉第一行', m.first.trim() === `版本 ${label}`, `第一行是「${m.first}」，应为「版本 ${label}」`)
+  const db = await open1440(true)
+  row('[版本] 取不到时 1440 不渲染', !VER.test(db), `顶栏出现占位：${db}`)
+  const mb = await open375(true)
+  row('[版本] 取不到时 375 不渲染', !VER.test(mb.menu) && !mb.menu.includes('版本'), `下拉出现占位：${mb.menu}`)
+  return rows
+}
+
+const blankHealth = (page) => page.route('**/api/health', (r) => r.fulfill({ json: { code: 0, message: 'ok', data: { ts: 1, version: '' } } }))
 
 // 助手输入框提示语：手机没有 Shift 键，不能写「Shift+Enter」
 async function hintRow(page, width) {

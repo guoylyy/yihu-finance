@@ -56,8 +56,9 @@
                 <el-icon :size="17"><QuestionFilled /></el-icon>
               </el-button>
             </el-tooltip>
+            <span v-if="version" class="app-version">v{{ version }}</span>
           </template>
-          <!-- 手机端顶栏只留「菜单 / 标题 / 头像」，助手、异常、手册收进头像下拉 -->
+          <!-- 手机端顶栏只留「菜单 / 标题 / 头像」，版本、助手、异常、手册收进头像下拉 -->
           <el-dropdown :trigger="isMobile ? 'click' : 'hover'" @command="onCommand">
             <span class="user">
               <el-badge v-if="isMobile" is-dot :hidden="!anomalyCount" class="m-avatar">
@@ -73,6 +74,7 @@
             <template #dropdown>
               <el-dropdown-menu>
                 <template v-if="isMobile">
+                  <el-dropdown-item v-if="version" disabled class="m-user-line">版本 v{{ version }}</el-dropdown-item>
                   <el-dropdown-item disabled class="m-user-line">
                     {{ user?.name }} · {{ ROLE_LABELS[user?.role] || user?.role }}
                   </el-dropdown-item>
@@ -123,8 +125,11 @@ const anomalyCount = ref(0)
 const assistant = useAssistantStore()
 const { isMobile, isTablet } = useViewport()
 const navOpen = ref(false)
+const version = ref('')
 
 onMounted(async () => {
+  // 版本号以后端为准；取不到就不显示，也不打扰用户
+  api.health().then((h) => { version.value = h.version || '' }).catch(() => {})
   try {
     const me = await api.auth.me()
     setPermissions(me.permissions)
@@ -198,6 +203,7 @@ function onCommand(cmd) {
 .main { background: var(--bg); padding: 18px 20px; overflow-y: auto; }
 .right { display: flex; align-items: center; gap: 4px; }
 .right .is-on { color: var(--accent); }
+.app-version { font-size: 12px; color: var(--text-muted); white-space: nowrap; margin: 0 6px; }
 
 /* 平板：图标栏 */
 .sidebar.is-collapsed .logo { justify-content: center; padding: 18px 0 14px; }

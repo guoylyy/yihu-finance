@@ -14,6 +14,8 @@ RUN npm ci --omit=dev --no-audit --no-fund
 COPY backend/prisma ./prisma
 RUN npx prisma generate
 COPY backend/src ./src
+# 版本号的来源（lib/version.js 读它，经 /api/health 显示在界面右上角）
+COPY yh-app.json /app/yh-app.json
 COPY --from=web /src/frontend/dist /app/frontend/dist
 ENV NODE_ENV=production PORT=3010 UPLOAD_DIR=/data/uploads
 EXPOSE 3010

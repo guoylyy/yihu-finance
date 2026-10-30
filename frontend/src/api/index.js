@@ -87,6 +87,7 @@ const crud = (base) => ({
 const B = `${BASE}/api/fin`
 
 export const api = {
+  health: () => get(`${BASE}/api/health`),
   auth: {
     login: (b) => post(`${BASE}/api/auth/login`, b),
     mode: () => get(`${BASE}/api/auth/mode`),

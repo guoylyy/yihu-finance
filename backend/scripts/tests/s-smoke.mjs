@@ -1,4 +1,5 @@
 // S. 冒烟：所有模式都跑（含 --read-only 的生产冒烟），只调接口、不写业务数据
+import fs from 'node:fs'
 import { assert, ctx, assertChatShape } from './lib.mjs'
 
 const TOTALS = [['invoice', '/api/fin/invoices'], ['receivable', '/api/fin/receivables'], ['transaction', '/api/fin/transactions'], ['account', '/api/fin/accounts']]
@@ -10,6 +11,12 @@ export default async function run(t) {
   await check('S', '/api/health 正常', async () => {
     const r = await t.api.http('GET', '/api/health')
     assert.equal(r.json.code, 0)
+  })
+  await check('S', '/api/health 的 version 与 yh-app.json 一致', async () => {
+    const r = await t.api.http('GET', '/api/health')
+    const { version } = JSON.parse(fs.readFileSync(new URL('../../../yh-app.json', import.meta.url), 'utf8'))
+    assert.ok(version)
+    assert.equal(r.json.data.version, version)
   })
   await check('S', `/assistant/status：available=true 且 stub=${t.mode === 'stub'}`, async () => {
     const s = await t.api.data('GET', '/api/fin/assistant/status', token())

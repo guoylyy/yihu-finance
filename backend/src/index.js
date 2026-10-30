@@ -28,6 +28,7 @@ import { auth } from './lib/auth.js'
 import { fileURLToPath } from 'url'
 import { mountPlatform, serveFrontend, callSelf } from './lib/platform.js'
 import { resolveUser, signFor } from './lib/platform-users.js'
+import { APP_VERSION } from './lib/version.js'
 
 // Prisma 的 BigInt 主键默认无法被 JSON.stringify 序列化
 BigInt.prototype.toJSON = function () { return this.toString() }
@@ -39,7 +40,7 @@ app.use(cors())
 app.use(express.json({ limit: '20mb' }))
 app.use(express.urlencoded({ extended: true }))
 
-app.get('/api/health', (req, res) => res.json({ code: 0, message: 'ok', data: { ts: Date.now() } }))
+app.get('/api/health', (req, res) => res.json({ code: 0, message: 'ok', data: { ts: Date.now(), version: APP_VERSION } }))
 app.use('/api/auth', authRouter)
 
 // 以下全部需要登录
