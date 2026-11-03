@@ -76,45 +76,58 @@
     <div class="table-card">
       <ResponsiveTable ref="tableRef" :data="list" v-loading="loading" @selection-change="selection = $event" size="small">
         <el-table-column type="selection" width="40" />
-        <el-table-column prop="txnDate" label="日期" width="98">
+        <!-- 1440 下表格可视宽约 778：选择 40 + 日期 90 + 公司/账户 120 + 对方 ≥130（弹性吃掉余量）+ 业务类型 100
+             + 固定列 金额 130 / 操作 150 = 760，一屏放下、不出现被固定列压住的空缝。
+             分类 / 状态 / 编号 只在手机卡片里作独立字段；桌面端状态并进「对方」单元格第二行。 -->
+        <el-table-column prop="txnDate" label="日期" width="90">
           <template #default="{ row }">{{ date(row.txnDate) }}</template>
         </el-table-column>
-        <el-table-column label="公司/账户" width="150" mobile="full">
+        <el-table-column label="公司/账户" width="120" mobile="full">
           <template #default="{ row }">
             <div>{{ row.company?.code }}</div>
-            <div class="muted" style="font-size: 12px">{{ row.account?.name }}</div>
+            <div class="muted ellipsis" style="font-size: 12px" :title="row.account?.name">{{ row.account?.name }}</div>
           </template>
         </el-table-column>
-        <el-table-column label="对方名称 / 备注" min-width="200" mobile="title">
+        <el-table-column label="对方名称 / 备注" min-width="130" mobile="title">
           <template #default="{ row }">
-            <div>{{ row.counterparty || '—' }}</div>
-            <div class="muted" style="font-size: 12px">{{ row.remark }}</div>
+            <div class="ellipsis" :title="row.counterparty">{{ row.counterparty || '—' }}</div>
+            <div v-if="!isMobile" class="cp-sub">
+              <el-tag size="small" class="cp-status" :type="tagOf(TXN_STATUS, row.status)">{{ labelOf(TXN_STATUS, row.status) }}</el-tag>
+              <span v-if="row.remark" class="muted ellipsis" :title="row.remark">{{ row.remark }}</span>
+            </div>
+            <div v-else class="muted" style="font-size: 12px">{{ row.remark }}</div>
           </template>
         </el-table-column>
-        <el-table-column label="业务类型" width="110" mobile="badge">
+        <el-table-column label="业务类型" width="100" mobile="badge">
           <template #default="{ row }">
             <el-tag size="small" effect="plain">{{ BIZ_LABEL[row.bizType] || row.bizType }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="分类" width="110">
+        <el-table-column v-if="isMobile" label="分类" width="110">
           <template #default="{ row }">{{ row.category?.name || '—' }}</template>
         </el-table-column>
-        <el-table-column label="金额" width="130" align="right" mobile="amount">
-          <template #default="{ row }">
-            <span class="money" :class="row.direction === 'IN' ? 'money-in' : 'money-out'">
-              {{ row.direction === 'IN' ? '+' : '−' }}{{ money(row.amount) }}
-            </span>
-          </template>
-        </el-table-column>
-        <el-table-column label="状态" width="90" mobile="badge">
+        <el-table-column v-if="isMobile" label="状态" width="76" mobile="badge">
           <template #default="{ row }">
             <el-tag size="small" :type="tagOf(TXN_STATUS, row.status)">{{ labelOf(TXN_STATUS, row.status) }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="code" label="编号" width="140" />
-        <el-table-column label="操作" width="150" fixed="right">
+        <el-table-column v-if="isMobile" prop="code" label="编号" width="140" />
+        <el-table-column label="金额" width="130" align="right" fixed="right" mobile="amount">
+          <template #default="{ row }">
+            <span class="money" :class="row.direction === 'IN' ? 'money-in' : 'money-out'">
+              {{ row.direction === 'IN' ? '+' : '−' }}{{ money(row.amount) }}
+            </span>
+            <div v-if="row.direction === 'IN' && Number(row.claimedAmount) > 0" class="muted claim-line">
+              已认领 {{ money(row.claimedAmount) }}<template v-if="Number(row.remainingAmount) > 0">｜剩余 {{ money(row.remainingAmount) }}</template>
+            </div>
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="150" fixed="right" class-name="tx-ops">
           <template #default="{ row }">
             <PinButton type="transaction" :id="row.id" :label="`${row.code} ${row.direction === 'IN' ? '+' : '−'}${money(row.amount)}`" />
+            <el-tooltip v-if="canClaim && row.claimable" content="认领到应收" placement="top" :show-after="400">
+              <el-button link type="primary" aria-label="认领到应收" @click="reconcileRef?.open(row)">认领</el-button>
+            </el-tooltip>
             <el-button v-if="can('transaction.manage')" link type="primary" @click="openForm(row)">编辑</el-button>
             <el-button v-if="can('transaction.manage')" link type="danger" @click="remove(row)">作废</el-button>
           </template>
@@ -125,6 +138,8 @@
                        :page-sizes="[20, 50, 100, 200]" layout="total, sizes, prev, pager, next" @change="load" />
       </div>
     </div>
+
+    <ReconcileDialog ref="reconcileRef" @done="load" />
 
     <!-- 新增/编辑 -->
     <el-dialog v-model="formVisible" :title="form.id ? '编辑流水' : '新增流水'" width="580px">
@@ -193,6 +208,7 @@ import { companies, categories, accountsOf, loadMeta } from '@/composables/useMe
 import { BIZ_TYPES, BIZ_LABEL, TXN_STATUS, labelOf, tagOf } from '@/constants'
 import { money, date } from '@/utils/format'
 import PinButton from '@/components/PinButton.vue'
+import ReconcileDialog from '@/components/ReconcileDialog.vue'
 import { useDraftReceiver } from '@/stores/assistant'
 import ResponsiveTable from '@/components/mobile/ResponsiveTable'
 import ResponsivePager from '@/components/mobile/ResponsivePager'
@@ -216,6 +232,9 @@ const dateRange = ref([])
 const q = reactive({ company_id: '', account_id: '', direction: '', biz_type: '', status: '', keyword: '', date_from: '', date_to: '' })
 const batch = reactive({ bizType: '', categoryId: '', status: '' })
 
+const reconcileRef = ref(null)
+// 认领会同时改流水关联与应收已收，两个权限都要有（与后端一致）
+const canClaim = computed(() => can('transaction.manage') && can('receivable.manage'))
 const formVisible = ref(false)
 const form = ref({})
 
@@ -332,6 +351,15 @@ onMounted(async () => {
 </script>
 
 <style scoped>
+.claim-line { font-size: 12px; }
+.ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cp-sub { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 12px; margin-top: 2px; }
+.cp-sub .ellipsis { flex: 1; min-width: 0; }
+.cp-status { flex: none; height: 18px; padding: 0 5px; font-size: 11px; }
+/* 操作列压到 150px：@ / 认领 / 编辑 / 作废 四个按钮收紧间距 */
+:deep(.tx-ops .cell) { padding-left: 6px; padding-right: 6px; white-space: nowrap; }
+:deep(.tx-ops .cell .el-button.is-link) { padding-left: 0; padding-right: 0; }
+:deep(.tx-ops .cell .el-button + .el-button) { margin-left: 6px; }
 .batch-bar {
   display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
   background: #fdf5f1; border: 1px solid #f0d9cd;

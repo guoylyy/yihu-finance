@@ -53,6 +53,7 @@ async function request(url, options = {}) {
 const get = (url, params) => request(url + qs(params))
 const post = (url, body) => request(url, { method: 'POST', body: JSON.stringify(body || {}) })
 const put = (url, body) => request(url, { method: 'PUT', body: JSON.stringify(body || {}) })
+const patch = (url, body) => request(url, { method: 'PATCH', body: JSON.stringify(body || {}) })
 const del = (url) => request(url, { method: 'DELETE' })
 const upload = (url, formData) => request(url, { method: 'POST', body: formData, timeout: 120000 })
 
@@ -112,12 +113,22 @@ export const api = {
     importPreview: (fd) => upload(`${B}/transactions/import/preview`, fd),
     importCommit: (b) => post(`${B}/transactions/import/commit`, b),
     batches: (p) => get(`${B}/transactions/import/batches`, p),
+    receipts: (id) => get(`${B}/transactions/${id}/receipts`),
+    // 流水侧拆分认领：{ items: [{ receivableId, amount }] }
+    reconcile: (id, b) => post(`${B}/transactions/${id}/reconcile`, b),
     exportUrl: `${B}/transactions/export`
   },
   receivables: {
     ...crud(`${B}/receivables`),
     overdue: () => get(`${B}/receivables/overdue`),
-    receipt: (id, b) => post(`${B}/receivables/${id}/receipt`, b)
+    // 带 transactionId = 认领已有流水；带 accountId = 新建一条流水并认领
+    receipt: (id, b) => post(`${B}/receivables/${id}/receipt`, b),
+    receiptCandidates: (id, p) => get(`${B}/receivables/${id}/receipt-candidates`, p),
+    receipts: (id) => get(`${B}/receivables/${id}/receipts`)
+  },
+  receipts: {
+    list: (p) => get(`${B}/receipts`, p),
+    revoke: (id, keepTransaction) => del(`${B}/receipts/${id}${keepTransaction ? '?keep_transaction=1' : ''}`)
   },
   payables: {
     ...crud(`${B}/payables`),
@@ -158,7 +169,9 @@ export const api = {
     stats: (p) => get(`${B}/invoices/stats`, p),
     duplicates: () => get(`${B}/invoices/duplicates`),
     importFile: (fd) => upload(`${B}/invoices/import`, fd),
-    linkTransaction: (id, b) => post(`${B}/invoices/${id}/link-transaction`, b)
+    linkTransaction: (id, b) => post(`${B}/invoices/${id}/link-transaction`, b),
+    // 挂应收 / 摘除（receivableId 传 null）
+    linkReceivable: (id, receivableId) => patch(`${B}/invoices/${id}`, { receivableId })
   },
   loans: { ...crud(`${B}/loans`), summary: () => get(`${B}/loans/summary`), repay: (id, b) => post(`${B}/loans/${id}/repay`, b) },
   close: {

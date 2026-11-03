@@ -3,7 +3,7 @@
     ref="tableRef"
     :api="api.receivables"
     title="应收与收款"
-    subtitle="已经收到的钱：新增时勾「已收到款」并选账户；还没到账的：先登记应收，收到后点「登记回款」"
+    subtitle="已经收到的钱：新增时勾「已收到款」并选账户；还没到账的：先登记应收，钱到了点「认领流水」从流水里选那笔（找不到再新建）"
     entity-name="应收款"
     add-text="登记应收款"
     :columns="columns"
@@ -11,7 +11,7 @@
     :filters="filters"
     :default-form="{ status: 'PENDING', confidence: 'HIGH', amount: 0, received: false, receiptDate: today }"
     :can-manage="can('receivable.manage')"
-    :action-width="200"
+    :action-width="250"
     pin-type="receivable"
     :pin-label="(r) => `${r.code} ${r.title}`"
     draft-kind="receivable"
@@ -21,6 +21,7 @@
     @loaded="onLoaded"
   >
     <template #form-extra="{ form }">
+      <ReceivableInvoicePicker :form="form" :customers="customers" />
       <el-divider content-position="left" style="margin: 4px 0 16px">
         <span class="muted" style="font-size: 12px">钱是否已经到账</span>
       </el-divider>
@@ -29,7 +30,7 @@
         <div class="muted" style="font-size: 12px; line-height: 1.6">
           不勾选 = 只登记「预计要收的钱」，不影响账户余额；
           勾选 = 同时记一笔收入流水，选中账户的余额立刻增加。
-          <span v-if="form.id">已登记的应收款请用列表里的「登记回款」。</span>
+          <span v-if="form.id">已登记的应收款请用列表里的「认领流水」。</span>
         </div>
       </el-form-item>
       <template v-if="form.received && !form.id">
@@ -72,33 +73,15 @@
     </template>
 
     <template #row-actions="{ row }">
+      <el-button link type="primary" @click="drawerRef?.open(row.id)">详情</el-button>
       <el-button v-if="can('receivable.manage') && ['PENDING', 'PARTIAL'].includes(row.status)"
-                 link type="primary" @click="openReceipt(row)">登记回款</el-button>
+                 link type="primary" @click="openReceipt(row)">认领流水</el-button>
     </template>
   </CrudTable>
 
-  <el-dialog v-model="receiptVisible" title="登记回款" width="460px">
-    <el-alert v-if="current" type="info" :closable="false" style="margin-bottom: 14px"
-              :title="`${current.title}｜应收 ¥${money(current.amount)}｜已收 ¥${money(current.receivedAmount)}`" />
-    <el-form :model="receipt" label-width="100px">
-      <el-form-item label="收款账户" required>
-        <el-select v-model="receipt.accountId" style="width: 100%">
-          <el-option v-for="a in accountsOf(current?.companyId)" :key="a.id" :label="`${a.name}（${a.currency}）`" :value="a.id" />
-        </el-select>
-      </el-form-item>
-      <el-form-item label="本次收款" required>
-        <el-input-number v-model="receipt.amount" :precision="2" :min="0" :step="1000" style="width: 100%" inputmode="decimal" :controls="!isMobile" />
-      </el-form-item>
-      <el-form-item label="收款日期">
-        <el-date-picker v-model="receipt.receiptDate" type="date" value-format="YYYY-MM-DD" style="width: 100%" />
-      </el-form-item>
-      <el-form-item label="备注"><el-input v-model="receipt.remark" /></el-form-item>
-    </el-form>
-    <template #footer>
-      <el-button @click="receiptVisible = false">取消</el-button>
-      <el-button type="primary" :loading="saving" @click="submitReceipt">确认收款</el-button>
-    </template>
-  </el-dialog>
+  <ReceiptDialog ref="receiptRef" @done="onReceiptDone" />
+  <ReceivableDrawer ref="drawerRef" @claim="openReceipt" @changed="refresh" />
+
 </template>
 
 <script setup>
@@ -106,24 +89,23 @@ import { ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import CrudTable from '@/components/CrudTable.vue'
 import PinButton from '@/components/PinButton.vue'
+import ReceiptDialog from '@/components/ReceiptDialog.vue'
+import ReceivableDrawer from '@/components/ReceivableDrawer.vue'
+import ReceivableInvoicePicker from '@/components/ReceivableInvoicePicker.vue'
 import api from '@/api'
 import { can } from '@/api/permissions'
 import { companies, accountsOf, loadMeta } from '@/composables/useMeta'
 import { RECEIVABLE_STATUS, CONFIDENCE } from '@/constants'
 import { money } from '@/utils/format'
-import { useViewport } from '@/composables/useViewport'
 import { useDraftReceiver } from '@/stores/assistant'
-
-const { isMobile } = useViewport()
+import { receiptToast } from '@/utils/receipt'
 
 const tableRef = ref(null)
+const receiptRef = ref(null)
+const drawerRef = ref(null)
 const today = new Date().toISOString().slice(0, 10)
-const receiptVisible = ref(false)
-const saving = ref(false)
-const current = ref(null)
 const overdue = ref({})
 const customers = ref([])
-const receipt = ref({})
 
 const companyOptions = () => companies.value.map((c) => ({ value: String(c.id), label: c.code }))
 const customerOptions = () => customers.value.map((c) => ({ value: String(c.id), label: c.name }))
@@ -166,17 +148,31 @@ function beforeSave(form) {
   return form
 }
 
-// 新增时勾了「已收到款」，紧接着登记一笔全额回款（生成收入流水并更新账户余额）
+// 保存后：① 按表单里选的发票逐张挂 / 摘；② 新增时勾了「已收到款」，紧接着登记一笔全额回款（生成收入流水并更新账户余额）
 async function afterSave(row, form, isCreate) {
+  await syncInvoices(row, form)
   if (!isCreate || !form.received) return
   if (!form.receiptAccountId) throw new Error('请选择收款账户')
-  await api.receivables.receipt(row.id, {
+  const r = await api.receivables.receipt(row.id, {
     accountId: form.receiptAccountId,
     amount: form.amount,
     receiptDate: form.receiptDate || today
   })
   await loadMeta(true)   // 账户余额变了，刷新缓存
-  ElMessage.success('已记一笔收入流水，账户余额同步更新')
+  receiptToast(r, row.code, { newTxn: true })
+}
+
+// 发票整组对齐：新选的挂上、去掉的摘除（PATCH /invoices/:id），后端的提示（客户不一致等）原样弹出
+async function syncInvoices(row, form) {
+  if (!form.invoiceIds) return
+  const orig = form._origInvoiceIds || []
+  const add = form.invoiceIds.filter((id) => !orig.includes(id))
+  const drop = orig.filter((id) => !form.invoiceIds.includes(id))
+  const warns = []
+  for (const id of add) warns.push(...((await api.invoices.linkReceivable(id, row.id)).warnings || []))
+  for (const id of drop) await api.invoices.linkReceivable(id, null)
+  if (add.length || drop.length) ElMessage.success(`发票已更新：挂上 ${add.length} 张，摘除 ${drop.length} 张`)
+  if (warns.length) ElMessage({ type: 'warning', message: warns.join('；'), duration: 6000, showClose: true })
 }
 
 function onLoaded(data) {
@@ -186,48 +182,40 @@ function onLoaded(data) {
 }
 
 function openReceipt(row) {
-  current.value = row
-  receipt.value = {
-    amount: Number(row.amount) - Number(row.receivedAmount),
-    receiptDate: new Date().toISOString().slice(0, 10),
-    accountId: accountsOf(row.companyId)[0]?.id
-  }
-  receiptVisible.value = true
+  receiptRef.value?.open(row)
 }
 
-// 录入助手的回款草稿「填入表单」：打开这笔应收的登记回款弹窗，带上草稿里的账户 / 金额 / 日期
+function refresh() {
+  tableRef.value?.reload()
+  loadOverdue()
+}
+
+function onReceiptDone() {
+  refresh()
+  drawerRef.value?.reload?.()
+}
+
+// 录入助手的回款草稿「填入表单」：打开这笔应收的认领弹窗「新建流水」页，带上草稿里的账户 / 金额 / 日期；
+// 弹窗里可以「上一步」改为从已有流水里选，避免重复入账
 async function openReceiptPrefill(p) {
   if (!p.payload.refId) return ElMessage.warning('请先在草稿卡上选要冲减的应收')
   try {
-    openReceipt(await api.receivables.get(p.payload.refId))
+    const row = await api.receivables.get(p.payload.refId)
     const { accountId, amount, txnDate, remark } = p.payload
-    receipt.value = {
-      ...receipt.value,
-      ...(accountId ? { accountId } : {}),
-      ...(amount ? { amount: Number(amount) } : {}),
-      ...(txnDate ? { receiptDate: txnDate } : {}),
-      ...(remark ? { remark } : {})
-    }
+    receiptRef.value?.open(row, {
+      mode: 'new',
+      prefill: {
+        ...(accountId ? { accountId } : {}),
+        ...(amount ? { amount: Number(amount) } : {}),
+        ...(txnDate ? { receiptDate: txnDate } : {}),
+        ...(remark ? { remark } : {})
+      }
+    })
   } catch (e) {
     ElMessage.error(e.message)
   }
 }
 useDraftReceiver('receipt', { onPrefill: openReceiptPrefill })
-
-async function submitReceipt() {
-  saving.value = true
-  try {
-    await api.receivables.receipt(current.value.id, receipt.value)
-    ElMessage.success('回款已登记，并生成了一笔收入流水')
-    receiptVisible.value = false
-    tableRef.value?.reload()
-    loadOverdue()
-  } catch (e) {
-    ElMessage.error(e.message)
-  } finally {
-    saving.value = false
-  }
-}
 
 async function loadOverdue() {
   try {

@@ -12,7 +12,8 @@ export default defineConfig({
   server: {
     port: 5183,
     proxy: {
-      '/api': { target: 'http://localhost:3010', changeOrigin: true }
+      // 默认连 3010；联调别的后端（如 dev 库 3019）用 FIN_API_TARGET=http://localhost:3019 npm run dev
+      '/api': { target: process.env.FIN_API_TARGET || 'http://localhost:3010', changeOrigin: true }
     }
   }
 })

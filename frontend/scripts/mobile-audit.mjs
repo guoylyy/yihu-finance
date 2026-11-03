@@ -54,10 +54,12 @@ const FIND_OVERFLOW = (vw) => {
     for (let e = el; e && e !== document.body && parts.length < 4; e = e.parentElement) parts.unshift(sel(e))
     return parts.join(' > ')
   }
+  // 任一层裁剪 / 滚动祖先（overflow-x 非 visible）落在视口内就算兜住了。
+  // 不能只看最近的一层：表格单元格自己的 div.cell 是 overflow:hidden，但它本身就在表格的横向滚动区里
   const clipped = (el) => {
     for (let p = el.parentElement; p && p !== document.body; p = p.parentElement) {
       const ox = getComputedStyle(p).overflowX
-      if (ox !== 'visible') return p.getBoundingClientRect().right <= vw + 1
+      if (ox !== 'visible' && p.getBoundingClientRect().right <= vw + 1) return true
     }
     return false
   }
