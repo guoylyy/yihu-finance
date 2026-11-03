@@ -175,11 +175,11 @@ export function makeRunner(opts, env) {
 
 // ---------- 数据库直连（仅写库模式：建数前后行数快照、硬删除测试数据） ----------
 // 按外键依赖排好的删除顺序：先删引用别人的
-const PURGE_ORDER = ['transaction', 'importBatch', 'attachment', 'invoice', 'receivable', 'payable', 'payment', 'payroll', 'reimbursement',
+const PURGE_ORDER = ['prepayment', 'receipt', 'transaction', 'importBatch', 'attachment', 'invoice', 'receivable', 'payable', 'payment', 'payroll', 'reimbursement',
   'loan', 'forecastItem', 'closePeriod', 'project', 'customer', 'supplier', 'person', 'account']
 export const COUNT_TABLES = ['user', 'auditLog', 'company', 'account', 'person', 'customer', 'supplier', 'project', 'category', 'transaction',
   'importBatch', 'receivable', 'payable', 'payment', 'payroll', 'payrollItem', 'reimbursement', 'invoice', 'loan', 'loanRepayment',
-  'attachment', 'closePeriod', 'forecastItem', 'assistantDraft', 'assistantSubmission']
+  'attachment', 'closePeriod', 'forecastItem', 'assistantDraft', 'assistantSubmission', 'receipt', 'prepayment']
 // 按用户归属的测试数据（录入助手草稿与提交指纹），跟着测试用户一起删
 const USER_OWNED = ['assistantSubmission', 'assistantDraft']
 

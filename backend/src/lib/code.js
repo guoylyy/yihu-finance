@@ -10,16 +10,26 @@ const MODEL_BY_PREFIX = {
   PAY: 'payment',
   PR: 'payroll',
   EXP: 'reimbursement',
-  LN: 'loan'
+  LN: 'loan',
+  PRE: 'prepayment'
 }
 
 const MAX_RETRY = 3
 
+// 编号里的年月一律按北京时间（Asia/Shanghai）算，不跟服务器时区走。
+// 以前用 getFullYear()/getMonth()（本地时区）：业务日期是 UTC 零点（toDate），
+// 在 UTC-8 的机器上 2026-11-01 会编成 TXN-202610-xxxx；容器若是 UTC，11-01 08:00 前新建的应收也会差一年/一月。
+const SHANGHAI_YM = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit' })
+
+export function shanghaiYearMonth(date = new Date()) {
+  const d = date instanceof Date && !Number.isNaN(date.getTime()) ? date : new Date()
+  const parts = Object.fromEntries(SHANGHAI_YM.formatToParts(d).map((p) => [p.type, p.value]))
+  return { y: parts.year, m: parts.month }
+}
+
 function headOf(prefix, { monthly = true, date = new Date() } = {}) {
   if (!MODEL_BY_PREFIX[prefix]) throw new Error(`未知的编号前缀：${prefix}`)
-  const d = date instanceof Date && !Number.isNaN(date.getTime()) ? date : new Date()
-  const y = d.getFullYear()
-  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const { y, m } = shanghaiYearMonth(date)
   return monthly ? `${prefix}-${y}${m}-` : `${prefix}-${y}-`
 }
 

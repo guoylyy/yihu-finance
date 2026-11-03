@@ -24,7 +24,8 @@ import { isCodeConflict } from './code.js'
  *  dateRangeField 支持 date_from / date_to 过滤的日期字段
  *  scoped       是否按用户可见公司过滤（默认 true）
  *  required     新增时必填字段
- *  hooks        { beforeCreate, beforeUpdate, afterWrite }
+ *  hooks        { beforeCreate, beforeUpdate, afterWrite, listWhere }
+ *               listWhere(where, req)：列表查询前追加 filters 表达不了的条件（如 IS NULL），直接改 where
  */
 export function crudRouter(cfg) {
   const {
@@ -89,6 +90,7 @@ export function crudRouter(cfg) {
       if (date_from) where[dateRangeField].gte = toDate(date_from)
       if (date_to) where[dateRangeField].lte = toDate(date_to)
     }
+    if (hooks.listWhere) hooks.listWhere(where, req)
 
     const [list, total] = await Promise.all([
       db().findMany({ where, include, orderBy, skip, take }),

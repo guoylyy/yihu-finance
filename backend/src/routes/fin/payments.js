@@ -157,6 +157,8 @@ router.post('/:id/link-transaction', requirePermission('payment.pay'), wrap(asyn
     prisma.transaction.findFirst({ where: { id: BigInt(transactionId), deletedAt: null } })
   ])
   if (!payment || !txn) return notFound(res)
+  // v1.4：应收回款流水的 refType 由收款明细维护，不能被付款单改挂（否则应收已收与流水对不上）
+  if (['RECEIVABLE', 'RECEIVABLE_MULTI', 'PREPAYMENT'].includes(txn.refType)) return badRequest(res, `流水 ${txn.code} 已认领到应收/预收，不能再关联付款单`)
 
   const updated = await prisma.payment.update({
     where: { id },

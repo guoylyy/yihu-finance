@@ -24,6 +24,8 @@ import usersRouter from './routes/fin/users.js'
 import auditLogsRouter from './routes/fin/audit-logs.js'
 import aiRouter from './routes/fin/ai.js'
 import assistantRouter from './routes/fin/assistant.js'
+import receiptsRouter from './routes/fin/receipts.js'
+import prepaymentsRouter from './routes/fin/prepayments.js'
 import { auth } from './lib/auth.js'
 import { fileURLToPath } from 'url'
 import { mountPlatform, serveFrontend, callSelf } from './lib/platform.js'
@@ -55,6 +57,8 @@ app.use('/api/fin/payments', paymentsRouter)
 app.use('/api/fin/payrolls', payrollsRouter)
 app.use('/api/fin/reimbursements', reimbursementsRouter)
 app.use('/api/fin/invoices', invoicesRouter)
+app.use('/api/fin/receipts', receiptsRouter)         // v1.4 收款认领明细 / 撤销认领
+app.use('/api/fin/prepayments', prepaymentsRouter)   // v1.4 预收款
 app.use('/api/fin/loans', loansRouter)
 app.use('/api/fin/close-periods', closePeriodsRouter)
 app.use('/api/fin/dashboard', dashboardRouter)

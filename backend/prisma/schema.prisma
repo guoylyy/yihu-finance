@@ -95,6 +95,8 @@ model Company {
   suppliers      Supplier[]
   closePeriods   ClosePeriod[]
   forecastItems  ForecastItem[]
+  receipts       Receipt[]
+  prepayments    Prepayment[]
 
   @@map("companies")
 }
@@ -124,6 +126,7 @@ model Account {
   company      Company       @relation(fields: [companyId], references: [id])
   transactions Transaction[]
   payments     Payment[]
+  prepayments  Prepayment[]
 
   @@index([companyId])
   @@map("accounts")
@@ -174,6 +177,7 @@ model Customer {
   receivables Receivable[]
   invoices    Invoice[]
   projects    Project[]
+  prepayments Prepayment[]
 
   @@index([companyId])
   @@map("customers")
@@ -294,6 +298,8 @@ model Transaction {
 
   payments        Payment[]
   loanRepayments  LoanRepayment[]
+  receipts        Receipt[] // v1.4：这笔流水被认领到哪些应收
+  prepayments     Prepayment[] // v1.4：这笔流水里转成预收款的部分
 
   @@index([companyId, txnDate])
   @@index([accountId])
@@ -337,7 +343,9 @@ model Receivable {
   receivedAmount Decimal   @default(0) @map("received_amount") @db.Decimal(18, 2)
   expectDate     DateTime? @map("expect_date") @db.Date
   actualDate     DateTime? @map("actual_date") @db.Date
-  // PENDING 待收款 / PARTIAL 部分收款 / RECEIVED 已收款 / WRITTEN_OFF 已核销 / CANCELLED
+  // receivedAmount 是 receipts 汇总的冗余，只能由 lib/receipt.js 的 recalcReceivable() 全量重算写入
+  // PENDING 待收款 / PARTIAL 部分收款 / RECEIVED 已收款 —— 系统按 receipts 算出，不能手改
+  // WRITTEN_OFF 坏账核销 / CANCELLED 已取消 —— 人工终态
   status         String    @default("PENDING") @db.VarChar(20)
   confidence     String    @default("HIGH") @db.VarChar(20) // CONFIRMED / HIGH / ESTIMATE，用于现金预测
   remark         String?   @db.VarChar(500)
@@ -349,8 +357,89 @@ model Receivable {
   customer Customer? @relation(fields: [customerId], references: [id])
   project  Project?  @relation(fields: [projectId], references: [id])
 
+  invoices    Invoice[] // v1.4：本应收开出的发票（1 : N，部分开票）
+  receipts    Receipt[] // v1.4：本应收的收款构成
+  prepayments Prepayment[] // v1.4：认领超收时从本应收溢出的预收款
+
   @@index([companyId, status])
   @@map("receivables")
+}
+
+/// v1.4 收款认领单：一行 = 「某一笔收入流水」中的「一部分金额」认领到「某一笔应收」
+/// - 一笔流水拆给多笔应收 → 同一 transactionId 多行
+/// - 一笔应收收多次款     → 同一 receivableId 多行
+/// - 应收已收 = SUM(未撤销行.amount)；流水已认领 = SUM(未撤销行.amount) ≤ 流水金额
+model Receipt {
+  id            BigInt   @id @default(autoincrement())
+  companyId     BigInt   @map("company_id")      // 冗余：= 应收.companyId = 流水.companyId，便于按范围查
+  receivableId  BigInt   @map("receivable_id")
+  transactionId BigInt   @map("transaction_id")
+  amount        Decimal  @db.Decimal(18, 2)      // 本次认领金额，> 0
+  receiptDate   DateTime @map("receipt_date") @db.Date // 恒等于流水 txnDate（应收.actualDate 取各行最大值）
+
+  // LINK 选已有流水认领 / AUTO 登记回款时系统新建的流水 / BACKFILL v1.4 历史回填
+  source          String  @default("LINK") @db.VarChar(20)
+  // 认领前流水的 status；该流水最后一行认领被撤销时恢复它（AUTO/BACKFILL 为空）
+  txnStatusBefore String? @map("txn_status_before") @db.VarChar(20)
+  // 有效标记：有效=true，撤销=NULL。配合下面的唯一索引实现「同一流水×同一应收只能有一条有效认领」
+  //（MySQL 没有部分唯一索引，唯一键里含 NULL 时不冲突，撤销的历史行可以有多条）
+  activeFlag Boolean? @default(true) @map("active_flag")
+
+  remark    String?   @db.VarChar(500)
+  createdBy String?   @map("created_by") @db.VarChar(50)
+  revokedBy String?   @map("revoked_by") @db.VarChar(50)
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")          // 撤销 = 软删（硬约定 3），同时 activeFlag 置 NULL
+
+  company     Company     @relation(fields: [companyId], references: [id])
+  receivable  Receivable  @relation(fields: [receivableId], references: [id])
+  transaction Transaction @relation(fields: [transactionId], references: [id])
+
+  @@unique([receivableId, transactionId, activeFlag], map: "receipts_active_pair")
+  @@index([transactionId, deletedAt])
+  @@index([companyId, receiptDate])
+  @@map("receipts")
+}
+
+/// v1.4 预收款：客户打来的钱里「暂时没有应收可冲」的部分
+/// - 认领流水时超过应收剩余的部分自动转入（source=OVERPAY），也可手工登记（MANUAL），历史超收修正脚本写 HISTORY_FIX
+/// - 挂了流水的，占用该流水的「可认领金额」：流水已认领 = SUM(receipts) + SUM(prepayments)
+/// - usedAmount 预留给「预收冲应收」（下一版），本版恒为 0
+model Prepayment {
+  id            BigInt    @id @default(autoincrement())
+  code          String    @unique @db.VarChar(32) // PRE-YYYYMM-0001
+  companyId     BigInt    @map("company_id")
+  customerId    BigInt?   @map("customer_id")
+  amount        Decimal   @default(0) @db.Decimal(18, 2)
+  usedAmount    Decimal   @default(0) @map("used_amount") @db.Decimal(18, 2)
+  prepayDate    DateTime? @map("prepay_date") @db.Date // 挂流水的 = 流水日期
+  accountId     BigInt?   @map("account_id")
+  transactionId BigInt?   @map("transaction_id")
+  receivableId  BigInt?   @map("receivable_id") // OVERPAY / HISTORY_FIX：从哪笔应收溢出来的
+  receiptId     BigInt?   @map("receipt_id")    // OVERPAY：同一次认领产生的收款明细；撤销那行认领时一并撤销
+  // MANUAL 手工登记 / OVERPAY 认领超收自动转入 / HISTORY_FIX 历史超收修正脚本
+  source          String  @default("MANUAL") @db.VarChar(20)
+  // OPEN 未使用 / PARTIAL 部分使用 / USED 已用完
+  status          String  @default("OPEN") @db.VarChar(20)
+  // 挂流水前流水的 status（同 Receipt.txnStatusBefore，最后一笔占用撤销时恢复）
+  txnStatusBefore String? @map("txn_status_before") @db.VarChar(20)
+  remark          String? @db.VarChar(500)
+  createdBy       String? @map("created_by") @db.VarChar(50)
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+  deletedAt       DateTime? @map("deleted_at")
+
+  company     Company      @relation(fields: [companyId], references: [id])
+  customer    Customer?    @relation(fields: [customerId], references: [id])
+  account     Account?     @relation(fields: [accountId], references: [id])
+  transaction Transaction? @relation(fields: [transactionId], references: [id])
+  receivable  Receivable?  @relation(fields: [receivableId], references: [id])
+
+  @@index([companyId, customerId])
+  @@index([transactionId, deletedAt])
+  @@index([receiptId])
+  @@map("prepayments")
 }
 
 model Payable {
@@ -526,6 +615,7 @@ model Invoice {
   customerId      BigInt? @map("customer_id")
   supplierId      BigInt? @map("supplier_id")
   reimbursementId BigInt? @map("reimbursement_id")
+  receivableId    BigInt? @map("receivable_id") // v1.4：对应的应收（销项发票）；多张发票可挂同一笔应收（部分开票）
 
   // PENDING 待处理 / BOOKED 已入账 / VOID 作废
   status    String    @default("PENDING") @db.VarChar(20)
@@ -538,10 +628,12 @@ model Invoice {
   customer      Customer?      @relation(fields: [customerId], references: [id])
   supplier      Supplier?      @relation(fields: [supplierId], references: [id])
   reimbursement Reimbursement? @relation(fields: [reimbursementId], references: [id])
+  receivable    Receivable?    @relation(fields: [receivableId], references: [id])
   transactions  Transaction[]
 
   @@unique([companyId, invoiceNo])
   @@index([companyId, type, status])
+  @@index([receivableId])
   @@map("invoices")
 }
 

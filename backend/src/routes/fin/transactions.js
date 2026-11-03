@@ -3,7 +3,7 @@ import express from 'express'
 import multer from 'multer'
 import prisma from '../../lib/prisma.js'
 import { Prisma } from '@prisma/client'
-import { requirePermission, scopeWhere, inScope } from '../../lib/auth.js'
+import { requirePermission, scopeWhere, inScope, can } from '../../lib/auth.js'
 import { ok, badRequest, notFound, forbidden, wrap, readableError } from '../../lib/response.js'
 import { toDate } from '../../lib/period.js'
 import { createWithCode } from '../../lib/code.js'
@@ -12,6 +12,9 @@ import { logAudit } from '../../lib/audit.js'
 import { assertPeriodOpen } from '../../lib/close.js'
 import { parseBankFile, dedupHash, guessBizType, toXlsxBuffer } from '../../lib/excel.js'
 import { decodeFileName } from '../../lib/file.js'
+import {
+  ReceiptError, assertTxnChangeAllowed, CLAIM_REF_TYPES, parseAmount, lockTransaction, lockReceivable, assertTxnClaimable, allocate
+} from '../../lib/receipt.js'
 
 const router = express.Router()
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } })
@@ -53,6 +56,32 @@ function buildWhere(req) {
   return where
 }
 
+// v1.4：给列表每行补「已认领 / 剩余可认领 / 能否认领」，流水页据此显示「认领到应收」
+// 能认领的口径与 GET /receivables/:id/receipt-candidates 一致：收入、非内部转账、没挂付款单 / 借款还款、
+// refType 为空或属于应收 / 预收认领；v1.4 前没回填的历史回款流水（RECEIVABLE 但没有任何认领明细）视为已认领满
+async function withClaimInfo(list) {
+  const ins = list.filter((t) => t.direction === 'IN')
+  if (!ins.length) return list
+  const ids = ins.map((t) => t.id)
+  const [rs, ps, pays, loans] = await Promise.all([
+    prisma.receipt.groupBy({ by: ['transactionId'], where: { transactionId: { in: ids }, deletedAt: null }, _sum: { amount: true } }),
+    prisma.prepayment.groupBy({ by: ['transactionId'], where: { transactionId: { in: ids }, deletedAt: null }, _sum: { amount: true } }),
+    prisma.payment.findMany({ where: { transactionId: { in: ids }, deletedAt: null }, select: { transactionId: true } }),
+    prisma.loanRepayment.findMany({ where: { transactionId: { in: ids } }, select: { transactionId: true } })
+  ])
+  const taken = new Set([...pays, ...loans].map((x) => String(x.transactionId)))
+  return list.map((t) => {
+    if (t.direction !== 'IN') return t
+    const r = rs.find((x) => x.transactionId === t.id)?._sum.amount
+    const p = ps.find((x) => x.transactionId === t.id)?._sum.amount
+    const legacy = t.refType === 'RECEIVABLE' && !r && !p
+    const claimed = legacy ? new Prisma.Decimal(t.amount) : new Prisma.Decimal(r || 0).plus(p || 0)
+    const remaining = new Prisma.Decimal(t.amount).minus(claimed)
+    const claimable = !t.transferPairId && !taken.has(String(t.id)) && (t.refType == null || CLAIM_REF_TYPES.includes(t.refType)) && remaining.gt(0)
+    return { ...t, claimedAmount: claimed.toFixed(2), remainingAmount: remaining.toFixed(2), claimable }
+  })
+}
+
 // ── 列表（带合计）──
 router.get('/', requirePermission('transaction.view'), wrap(async (req, res) => {
   const { page = 1, page_size = 20 } = req.query
@@ -70,7 +99,7 @@ router.get('/', requirePermission('transaction.view'), wrap(async (req, res) => 
   ])
   const sum = (d) => Number(sums.find((s) => s.direction === d)?._sum.amount || 0)
   return ok(res, {
-    list, total, page: Number(page), pageSize: take,
+    list: await withClaimInfo(list), total, page: Number(page), pageSize: take,
     incomeTotal: sum('IN'), expenseTotal: sum('OUT'),
     netTotal: Math.round((sum('IN') - sum('OUT')) * 100) / 100
   })
@@ -116,6 +145,8 @@ function pickTxn(body) {
     data[k] = v
   }
   if (body.txnDate) data.txnDate = toDate(body.txnDate)
+  // 「被应收 / 预收认领」的关联只能由 receipts / prepayments 维护，接口里手工传的一律忽略，防止伪造「已收款」
+  if (CLAIM_REF_TYPES.includes(data.refType)) { delete data.refType; delete data.refId }
   return data
 }
 
@@ -168,7 +199,21 @@ router.put('/:id', requirePermission('transaction.manage'), wrap(async (req, res
   })
   if (err) return sendErr(res, err)
 
-  const row = await prisma.transaction.update({ where: { id }, data: pickTxn(req.body), include: INCLUDE })
+  const data = pickTxn(req.body)
+  // 已认领到应收的流水：refType/refId 保持原样（由 receipts 维护），前端整行回传的值不覆盖
+  if (CLAIM_REF_TYPES.includes(before.refType)) { delete data.refType; delete data.refId }
+  let row
+  try {
+    row = await prisma.$transaction(async (tx) => {
+      // 锁住这笔流水再检查已认领金额，避免和认领并发时检查过期
+      await tx.$queryRaw`SELECT id FROM transactions WHERE id = ${id} FOR UPDATE`
+      await assertTxnChangeAllowed(tx, before, { amount: data.amount, direction: data.direction, companyId: data.companyId })
+      return tx.transaction.update({ where: { id }, data, include: INCLUDE })
+    })
+  } catch (e) {
+    if (e instanceof ReceiptError) return badRequest(res, e.message)
+    throw e
+  }
   await recalcAccountBalance(row.accountId)
   if (String(before.accountId) !== String(row.accountId)) await recalcAccountBalance(before.accountId)
   await logAudit(req, { action: 'UPDATE', entity: 'transaction', entityId: id, summary: `修改流水 ${row.code}`, before, after: row })
@@ -182,7 +227,17 @@ router.delete('/:id', requirePermission('transaction.manage'), wrap(async (req, 
   const locked = await assertPeriodOpen(before.companyId, before.txnDate)
   if (locked) return badRequest(res, locked)
 
-  await prisma.transaction.update({ where: { id }, data: { deletedAt: new Date() } })
+  try {
+    await prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM transactions WHERE id = ${id} FOR UPDATE`
+      // 已认领到应收的流水不能直接作废：以前作废了应收已收不回退（v1.4 修，见 04-踩过的坑）
+      await assertTxnChangeAllowed(tx, before, { delete: true })
+      await tx.transaction.update({ where: { id }, data: { deletedAt: new Date() } })
+    })
+  } catch (e) {
+    if (e instanceof ReceiptError) return badRequest(res, e.message)
+    throw e
+  }
   await recalcAccountBalance(before.accountId)
   await logAudit(req, { action: 'DELETE', entity: 'transaction', entityId: id, summary: `作废流水 ${before.code}`, before })
   return ok(res, { id: String(id) })
@@ -409,6 +464,99 @@ router.get('/import/batches', requirePermission('transaction.view'), wrap(async 
     orderBy: { id: 'desc' }, take: 50
   })
   return ok(res, { list })
+}))
+
+// ── v1.4 认领明细：这笔流水认领到了哪些应收 / 转了哪些预收 ──
+router.get('/:id(\\d+)/receipts', requirePermission('transaction.view'), wrap(async (req, res) => {
+  const txn = await prisma.transaction.findFirst({ where: { id: BigInt(req.params.id), deletedAt: null } })
+  if (!txn || !inScope(req.user, txn.companyId)) return notFound(res)
+  const [list, prepayments] = await Promise.all([
+    prisma.receipt.findMany({
+      where: { transactionId: txn.id, ...(req.query.include_revoked === '1' ? {} : { deletedAt: null }) },
+      include: { receivable: { select: { id: true, code: true, title: true, amount: true, receivedAmount: true, status: true } } },
+      orderBy: { id: 'asc' }
+    }),
+    prisma.prepayment.findMany({ where: { transactionId: txn.id, deletedAt: null }, orderBy: { id: 'asc' } })
+  ])
+  const claimed = [...list.filter((r) => !r.deletedAt), ...prepayments].reduce((s, r) => s.plus(r.amount), new Prisma.Decimal(0))
+  return ok(res, { list, prepayments, claimedAmount: claimed.toFixed(2), remainingAmount: new Prisma.Decimal(txn.amount).minus(claimed).toFixed(2) })
+}))
+
+// ── v1.4 从流水侧拆分认领：一笔流水一次分给多笔应收 ──
+// body { items: [{ receivableId, amount }] }；整组一个事务，任一笔不通过全部回滚
+// 每笔超过应收剩余的部分同样自动转预收；本次合计不能超过流水剩余可认领
+router.post('/:id(\\d+)/reconcile', requirePermission('transaction.manage'), wrap(async (req, res) => {
+  if (!can(req.user, 'receivable.manage')) return forbidden(res, '认领到应收会改动应收已收，需要「receivable.manage」权限')
+  const id = BigInt(req.params.id)
+  const raw = req.body?.items ?? req.body?.allocations
+  if (!Array.isArray(raw) || !raw.length) return badRequest(res, '请至少选择一笔应收并填写认领金额')
+  if (raw.length > 50) return badRequest(res, '一次最多拆给 50 笔应收')
+  const items = []
+  try {
+    for (const [i, it] of raw.entries()) {
+      if (!/^[1-9]\d{0,18}$/.test(String(it?.receivableId ?? ''))) throw new ReceiptError(`第 ${i + 1} 行应收 id 不合法`)
+      items.push({ idx: i, receivableId: BigInt(it.receivableId), amount: parseAmount(it.amount, `第 ${i + 1} 行认领金额`), remark: it.remark || null })
+    }
+  } catch (e) {
+    return badRequest(res, e.message)
+  }
+  const ids = items.map((x) => String(x.receivableId))
+  if (new Set(ids).size !== ids.length) return badRequest(res, '同一笔应收在本次拆分里出现了两次，请合并成一行')
+
+  const txn0 = await prisma.transaction.findFirst({ where: { id, deletedAt: null } })
+  if (!txn0 || !inScope(req.user, txn0.companyId)) return notFound(res, '流水不存在或已作废')
+  const ars0 = await prisma.receivable.findMany({ where: { id: { in: items.map((x) => x.receivableId) }, deletedAt: null } })
+  for (const it of items) {
+    const ar = ars0.find((a) => a.id === it.receivableId)
+    if (!ar || !inScope(req.user, ar.companyId)) return notFound(res, `第 ${it.idx + 1} 行的应收不存在或已作废`)
+    if (String(ar.companyId) !== String(txn0.companyId)) return badRequest(res, `应收 ${ar.code} 不属于流水 ${txn0.code} 所在公司，不能认领`)
+  }
+  const locked = await assertPeriodOpen(txn0.companyId, txn0.txnDate)
+  if (locked) return badRequest(res, `流水 ${txn0.code} 所在${locked}`)
+  const total = items.reduce((s, x) => s.plus(x.amount), new Prisma.Decimal(0))
+  const by = req.user?.username || req.user?.name || null
+
+  let out
+  try {
+    out = await prisma.$transaction(async (tx) => {
+      const txn = await lockTransaction(tx, id) // 先流水
+      if (!txn) throw new ReceiptError('流水不存在或已作废')
+      let { claimed, remaining } = await assertTxnClaimable(tx, txn)
+      if (total.gt(remaining)) throw new ReceiptError(`流水 ${txn.code} 只剩 ${remaining.toFixed(2)} 可认领，本次合计 ${total.toFixed(2)} 超出了`)
+      const startRemaining = remaining
+      const results = []
+      // 再按应收 id 升序逐个上锁，和别的入口加锁顺序一致，防死锁
+      for (const it of [...items].sort((a, b) => (a.receivableId < b.receivableId ? -1 : 1))) {
+        const ar = await lockReceivable(tx, it.receivableId)
+        if (!ar) throw new ReceiptError(`第 ${it.idx + 1} 行的应收不存在或已作废`)
+        const r = await allocate(tx, { txn, ar, amount: it.amount, claimable: remaining, claimedBefore: claimed, source: 'LINK', remark: it.remark, createdBy: by })
+        claimed = claimed.plus(it.amount)
+        remaining = remaining.minus(it.amount)
+        const after = await tx.receivable.findUnique({ where: { id: ar.id }, select: { id: true, code: true, amount: true, receivedAmount: true, status: true } })
+        results.push({ idx: it.idx, before: ar, receivable: after, amount: it.amount.toFixed(2), receiptAmount: r.receiptAmount.toFixed(2), receipt: r.receipt, prepayment: r.prepayment, overpaidAmount: r.excess.toFixed(2) })
+      }
+      const transaction = await tx.transaction.findUnique({ where: { id }, include: INCLUDE })
+      return { transaction, results: results.sort((a, b) => a.idx - b.idx), startRemaining, remaining }
+    }, { timeout: 20000 })
+  } catch (e) {
+    if (e instanceof ReceiptError) return badRequest(res, e.message)
+    throw e
+  }
+  await recalcAccountBalance(out.transaction.accountId) // 认领不改金额；按约定写流水后兜底重算
+  for (const r of out.results) {
+    await logAudit(req, {
+      action: 'UPDATE', entity: 'receivable', entityId: r.receivable.id,
+      summary: `${r.receivable.code} 认领流水 ${txn0.code} ${r.receiptAmount}（流水侧拆分）` + (r.prepayment ? `，超出 ${r.overpaidAmount} 转预收 ${r.prepayment.code}` : ''),
+      before: r.before, after: { receivable: r.receivable, receipt: r.receipt }
+    })
+    if (r.prepayment) await logAudit(req, { action: 'CREATE', entity: 'prepayment', entityId: r.prepayment.id, summary: `认领超收自动转预收 ${r.prepayment.code} ${r.overpaidAmount}（${r.receivable.code} ← ${txn0.code}）`, after: r.prepayment })
+  }
+  return ok(res, {
+    transaction: out.transaction,
+    results: out.results.map(({ idx, before, ...r }) => r),
+    allocatedAmount: total.toFixed(2),
+    remainingAmount: out.remaining.toFixed(2)
+  })
 }))
 
 export default router
